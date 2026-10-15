@@ -45,13 +45,19 @@ pub struct Agent {
 }
 
 impl Agent {
-    pub fn new(api: Api, key: DeviceKey, device_id: String, media: MediaOptions) -> Self {
+    pub fn new(
+        api: Api,
+        key: DeviceKey,
+        device_id: String,
+        media: MediaOptions,
+        policy: crate::consent::AccessPolicy,
+    ) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         Self {
             api,
             key,
             device_id,
-            sessions: std::sync::Mutex::new(Sessions::new(tx, media)),
+            sessions: std::sync::Mutex::new(Sessions::new(tx, media, policy)),
             outbox: tokio::sync::Mutex::new(rx),
         }
     }

@@ -57,6 +57,19 @@ pub enum SessionEvent {
     Failed(&'static str),
     /// The viewer (or server) ended the session.
     RemoteEnd,
+    /// The viewer may see and control the screen (no PIN needed, or PIN accepted).
+    Authorized,
+}
+
+/// Everything that defines one session.
+pub struct SessionConfig {
+    pub sid: String,
+    pub ice_servers: Vec<RTCIceServer>,
+    pub media: MediaOptions,
+    /// Unattended-access PIN to verify before sharing anything.
+    pub gate: Option<crate::control::PinGate>,
+    /// "Being controlled" banner text. `None` only when nothing real is shared (test pattern).
+    pub banner: Option<String>,
 }
 
 /// H.264 Constrained Baseline, which every browser decodes (often in hardware).
@@ -138,28 +151,19 @@ impl PeerConnectionEventHandler for Handler {
 
 /// How long the viewer has to complete the WebRTC handshake.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long the viewer has to enter the unattended-access PIN once connected.
+const PIN_ENTRY_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Runs one session until it ends. Always tells the viewer why it ended.
 pub async fn run_session(
-    sid: String,
-    ice_servers: Vec<RTCIceServer>,
+    cfg: SessionConfig,
     capturer: Box<dyn carson_capture::Capturer>,
-    media: MediaOptions,
     out: Outbox,
     events_tx: mpsc::UnboundedSender<SessionEvent>,
     mut events: mpsc::UnboundedReceiver<SessionEvent>,
 ) {
-    let reason = match session_inner(
-        &sid,
-        ice_servers,
-        capturer,
-        media,
-        &out,
-        events_tx,
-        &mut events,
-    )
-    .await
-    {
+    let sid = cfg.sid.clone();
+    let reason = match session_inner(&cfg, capturer, &out, events_tx, &mut events).await {
         Ok(reason) => reason,
         Err(e) => {
             tracing::error!(sid = %sid, error = %format!("{e:#}"), "session failed");
@@ -178,20 +182,19 @@ pub async fn run_session(
 }
 
 async fn session_inner(
-    sid: &str,
-    ice_servers: Vec<RTCIceServer>,
+    cfg: &SessionConfig,
     capturer: Box<dyn carson_capture::Capturer>,
-    media: MediaOptions,
     out: &Outbox,
     events_tx: mpsc::UnboundedSender<SessionEvent>,
     events: &mut mpsc::UnboundedReceiver<SessionEvent>,
 ) -> Result<&'static str> {
+    let (sid, media) = (cfg.sid.as_str(), &cfg.media);
     let handler = Arc::new(Handler {
         sid: sid.to_owned(),
         out: out.clone(),
-        events: events_tx,
+        events: events_tx.clone(),
     });
-    let pc = build_peer(ice_servers, handler)
+    let pc = build_peer(cfg.ice_servers.clone(), handler)
         .await
         .context("create peer connection")?;
 
@@ -236,6 +239,8 @@ async fn session_inner(
         ctl_channel,
         media.clone(),
         ctl.clone(),
+        cfg.gate.clone(),
+        events_tx,
     ));
 
     let offer = pc.create_offer(None).await?;
@@ -244,13 +249,21 @@ async fn session_inner(
 
     let mut capturer = Some(capturer);
     let mut streaming: Option<tokio::task::JoinHandle<()>> = None;
+    let mut banner: Option<crate::ui::Banner> = None;
+    let (mut connected, mut authorized) = (false, false);
     let deadline = tokio::time::sleep(CONNECT_TIMEOUT);
     tokio::pin!(deadline);
 
     let reason = loop {
         let event = tokio::select! {
             ev = events.recv() => ev,
-            _ = &mut deadline, if streaming.is_none() => break "connect_timeout",
+            _ = &mut deadline, if !(connected && authorized) => {
+                break if connected { "pin_timeout" } else { "connect_timeout" };
+            }
+            _ = async { banner.as_mut().expect("guarded").closed().await }, if banner.is_some() => {
+                tracing::info!(sid, "disconnected from the host's banner");
+                break "host_disconnected";
+            }
         };
         match event {
             None | Some(SessionEvent::RemoteEnd) => break "remote_end",
@@ -264,8 +277,33 @@ async fn session_inner(
                     tracing::warn!(error = %e, "ignoring bad remote ICE candidate");
                 }
             }
-            Some(SessionEvent::Connected) => {
+            Some(SessionEvent::Connected) | Some(SessionEvent::Authorized) => {
+                match event {
+                    Some(SessionEvent::Connected) => {
+                        connected = true;
+                        if !authorized {
+                            // The viewer now has time to enter the PIN.
+                            deadline
+                                .as_mut()
+                                .reset(tokio::time::Instant::now() + PIN_ENTRY_TIMEOUT);
+                        }
+                    }
+                    _ => authorized = true,
+                }
+                if !(connected && authorized) {
+                    continue;
+                }
                 if let Some(cap) = capturer.take() {
+                    // The banner goes up before the first frame leaves; no banner, no session.
+                    if let Some(text) = &cfg.banner {
+                        match crate::ui::Banner::show(text) {
+                            Ok(b) => banner = Some(b),
+                            Err(e) => {
+                                tracing::error!(error = %format!("{e:#}"), "cannot show the session banner");
+                                break "banner_unavailable";
+                            }
+                        }
+                    }
                     let payload_type = sender
                         .get_parameters()
                         .await?
@@ -294,6 +332,7 @@ async fn session_inner(
         task.abort();
     }
     control_task.abort(); // drops the injector → releases held keys/buttons
+    drop(banner); // removes the banner
     let _ = pc.close().await;
     Ok(reason)
 }
@@ -417,15 +456,14 @@ mod tests {
             ..Default::default()
         };
         let capturer = crate::media::open_source(&media).unwrap();
-        let session = tokio::spawn(run_session(
-            "ses_test".into(),
-            vec![],
-            capturer,
+        let cfg = SessionConfig {
+            sid: "ses_test".into(),
+            ice_servers: vec![],
             media,
-            out_tx,
-            ev_tx.clone(),
-            ev_rx,
-        ));
+            gate: None,
+            banner: None,
+        };
+        let session = tokio::spawn(run_session(cfg, capturer, out_tx, ev_tx.clone(), ev_rx));
 
         let (cand_tx, mut cand_rx) = mpsc::unbounded_channel();
         let (dc_tx, mut dc_rx) = mpsc::unbounded_channel();
@@ -602,5 +640,219 @@ mod tests {
             );
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
+    }
+
+    /// Relays signaling between a session and the test viewer until `done()` holds.
+    async fn relay_until(
+        out_rx: &mut mpsc::UnboundedReceiver<Envelope>,
+        cand_rx: &mut mpsc::UnboundedReceiver<RTCIceCandidateInit>,
+        viewer: &Arc<dyn PeerConnection>,
+        ev_tx: &mpsc::UnboundedSender<SessionEvent>,
+        mut done: impl FnMut() -> bool,
+        what: &str,
+    ) {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !done() {
+            assert!(Instant::now() < deadline, "timed out waiting for {what}");
+            tokio::select! {
+                Some(env) = out_rx.recv() => match env.message_type() {
+                    Some(MessageType::SdpOffer) => {
+                        let offer: RTCSessionDescription = serde_json::from_value(env.body).unwrap();
+                        viewer.set_remote_description(offer).await.unwrap();
+                        let answer = viewer.create_answer(None).await.unwrap();
+                        viewer.set_local_description(answer.clone()).await.unwrap();
+                        ev_tx.send(SessionEvent::Answer(Box::new(answer))).unwrap();
+                    }
+                    Some(MessageType::IceCandidate) => {
+                        viewer.add_ice_candidate(serde_json::from_value(env.body).unwrap()).await.unwrap();
+                    }
+                    Some(MessageType::SessionEnd) => panic!("session ended while waiting for {what}: {}", env.body),
+                    other => panic!("unexpected {other:?}"),
+                },
+                Some(c) = cand_rx.recv() => { ev_tx.send(SessionEvent::Candidate(c)).unwrap(); }
+                _ = tokio::time::sleep(Duration::from_millis(20)) => {}
+            }
+        }
+    }
+
+    /// Next JSON control message on `ctl`.
+    async fn next_control(
+        ctl: &Arc<dyn webrtc::data_channel::DataChannel>,
+    ) -> carson_proto::input::ControlMessage {
+        loop {
+            let ev = tokio::time::timeout(Duration::from_secs(5), ctl.poll())
+                .await
+                .expect("control message")
+                .unwrap();
+            if let webrtc::data_channel::DataChannelEvent::OnMessage(m) = ev
+                && m.is_string
+            {
+                return serde_json::from_slice(&m.data).unwrap();
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn unattended_pin_gates_video_and_input() {
+        use carson_proto::input::{ControlMessage, InputMessage};
+        let recorded = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let media = MediaOptions {
+            source: Source::TestPattern,
+            input: crate::media::InputMode::Record(Arc::clone(&recorded)),
+            ..Default::default()
+        };
+        let gate = crate::control::PinGate {
+            hash: crate::consent::hash_pin("482916").unwrap(),
+            guard: Arc::default(),
+        };
+        let (out_tx, mut out_rx) = mpsc::unbounded_channel::<Envelope>();
+        let (ev_tx, ev_rx) = mpsc::unbounded_channel();
+        let capturer = crate::media::open_source(&media).unwrap();
+        let cfg = SessionConfig {
+            sid: "ses_pin".into(),
+            ice_servers: vec![],
+            media,
+            gate: Some(gate),
+            banner: None,
+        };
+        let session = tokio::spawn(run_session(cfg, capturer, out_tx, ev_tx.clone(), ev_rx));
+
+        let (cand_tx, mut cand_rx) = mpsc::unbounded_channel();
+        let (dc_tx, mut dc_rx) = mpsc::unbounded_channel();
+        let frames = Arc::new(AtomicUsize::new(0));
+        let viewer = build_peer(
+            vec![],
+            Arc::new(ViewerHandler {
+                candidates: cand_tx,
+                frames: Arc::clone(&frames),
+                packets: Arc::default(),
+                channels: dc_tx,
+            }),
+        )
+        .await
+        .unwrap();
+
+        let channels = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+        {
+            let channels = Arc::clone(&channels);
+            tokio::spawn(async move {
+                while let Some(dc) = dc_rx.recv().await {
+                    let label = dc.label().await.unwrap();
+                    channels.lock().unwrap().insert(label, dc);
+                }
+            });
+        }
+        relay_until(
+            &mut out_rx,
+            &mut cand_rx,
+            &viewer,
+            &ev_tx,
+            || channels.lock().unwrap().len() == 2,
+            "data channels",
+        )
+        .await;
+        let ctl = channels.lock().unwrap()["ctl"].clone();
+
+        assert!(matches!(
+            next_control(&ctl).await,
+            ControlMessage::Displays { .. }
+        ));
+        assert_eq!(
+            next_control(&ctl).await,
+            ControlMessage::PinRequired { attempts_left: 5 }
+        );
+
+        // Input before the PIN is ignored, and no video flows.
+        ctl.send(bytes::BytesMut::from(
+            &InputMessage::Key {
+                down: true,
+                mods: 0,
+                code: "KeyX".into(),
+            }
+            .encode()[..],
+        ))
+        .await
+        .unwrap();
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert_eq!(
+            frames.load(Ordering::Relaxed),
+            0,
+            "video must not flow before the PIN"
+        );
+        assert!(
+            recorded.lock().unwrap().is_empty(),
+            "input must not be injected before the PIN"
+        );
+
+        ctl.send_text(r#"{"type":"pin","pin":"000000"}"#)
+            .await
+            .unwrap();
+        assert_eq!(
+            next_control(&ctl).await,
+            ControlMessage::PinResult {
+                ok: false,
+                attempts_left: 4,
+                retry_after_s: 0
+            }
+        );
+        ctl.send_text(r#"{"type":"pin","pin":"482916"}"#)
+            .await
+            .unwrap();
+        assert!(matches!(
+            next_control(&ctl).await,
+            ControlMessage::PinResult { ok: true, .. }
+        ));
+        assert_eq!(
+            next_control(&ctl).await,
+            ControlMessage::InputStatus {
+                available: true,
+                message: String::new()
+            }
+        );
+
+        relay_until(
+            &mut out_rx,
+            &mut cand_rx,
+            &viewer,
+            &ev_tx,
+            || frames.load(Ordering::Relaxed) >= 10,
+            "video after PIN",
+        )
+        .await;
+        ctl.send(bytes::BytesMut::from(
+            &InputMessage::Key {
+                down: true,
+                mods: 0,
+                code: "KeyY".into(),
+            }
+            .encode()[..],
+        ))
+        .await
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !recorded
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|e| e == "key KeyY down")
+        {
+            assert!(
+                Instant::now() < deadline,
+                "input not injected after PIN: {:?}",
+                recorded.lock().unwrap()
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(
+            !recorded.lock().unwrap().iter().any(|e| e.contains("KeyX")),
+            "pre-PIN input leaked"
+        );
+
+        ev_tx.send(SessionEvent::RemoteEnd).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), session)
+            .await
+            .expect("session did not stop")
+            .unwrap();
+        let _ = viewer.close().await;
     }
 }

@@ -253,12 +253,27 @@ pub enum ControlMessage {
     },
     /// Viewer → agent: switch the streamed display.
     SelectDisplay { index: usize },
+    /// Agent → viewer: this host needs its unattended-access PIN before anything is shared.
+    PinRequired { attempts_left: u32 },
+    /// Viewer → agent: the PIN (only ever inside the encrypted data channel).
+    Pin { pin: String },
+    /// Agent → viewer: result of a PIN attempt.
+    PinResult {
+        ok: bool,
+        attempts_left: u32,
+        #[serde(default, skip_serializing_if = "is_zero")]
+        retry_after_s: u64,
+    },
     /// Agent → viewer: whether input injection works (e.g. missing Accessibility permission).
     InputStatus {
         available: bool,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         message: String,
     },
+}
+
+fn is_zero(v: &u64) -> bool {
+    *v == 0
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

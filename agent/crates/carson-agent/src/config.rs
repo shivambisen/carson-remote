@@ -12,6 +12,24 @@ pub struct AgentConfig {
     pub server_url: String,
     pub device_id: String,
     pub name: String,
+    /// Allow sessions without someone clicking "Allow" at this computer.
+    #[serde(default)]
+    pub unattended: bool,
+    /// Argon2id hash of the unattended-access PIN, if one is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin_hash: Option<String>,
+}
+
+impl AgentConfig {
+    pub fn access_policy(&self) -> crate::consent::AccessPolicy {
+        if self.unattended {
+            crate::consent::AccessPolicy::Unattended {
+                pin_hash: self.pin_hash.clone(),
+            }
+        } else {
+            crate::consent::AccessPolicy::Attended
+        }
+    }
 }
 
 /// Where the agent keeps its state. Override with `--config-dir` or `CARSON_AGENT_DIR`.
@@ -102,12 +120,22 @@ mod tests {
             server_url: "https://c.example".into(),
             device_id: "dev_1".into(),
             name: "Mac".into(),
+            unattended: false,
+            pin_hash: None,
         };
         save(&dir, &cfg).unwrap();
         assert_eq!(load(&dir).unwrap(), Some(cfg));
         delete(&dir).unwrap();
         assert_eq!(load(&dir).unwrap(), None);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn configs_from_before_m6_default_to_attended() {
+        let old: AgentConfig =
+            serde_json::from_str(r#"{"server_url":"https://c","device_id":"d","name":"n"}"#)
+                .unwrap();
+        assert_eq!(old.access_policy(), crate::consent::AccessPolicy::Attended);
     }
 
     #[test]

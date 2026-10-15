@@ -6,22 +6,34 @@ use carson_proto::{AgentSessionRequest, Envelope, MessageType, SessionReason, Tu
 use tokio::sync::mpsc;
 use webrtc::peer_connection::{RTCIceCandidateInit, RTCIceServer, RTCSessionDescription};
 
-use crate::media::{MediaOptions, open_source};
-use crate::peer::{Outbox, SessionEvent, run_session, send};
+use std::sync::{Arc, Mutex};
+
+use carson_proto::ViewerInfo;
+
+use crate::consent::{AccessPolicy, CONSENT_TIMEOUT, PinGuard};
+use crate::control::PinGate;
+use crate::media::{InputMode, MediaOptions, open_source};
+use crate::peer::{Outbox, SessionConfig, SessionEvent, run_session, send};
+use crate::ui::{self, Consent};
 
 pub struct Sessions {
     out: Outbox,
     media: MediaOptions,
+    policy: AccessPolicy,
+    /// Failed-PIN counter shared by all sessions (lockout survives reconnects).
+    pins: Arc<Mutex<PinGuard>>,
     /// ICE servers announced via `turn.creds`, keyed by session, until the request arrives.
     pending_ice: HashMap<String, Vec<RTCIceServer>>,
     active: HashMap<String, mpsc::UnboundedSender<SessionEvent>>,
 }
 
 impl Sessions {
-    pub fn new(out: Outbox, media: MediaOptions) -> Self {
+    pub fn new(out: Outbox, media: MediaOptions, policy: AccessPolicy) -> Self {
         Self {
             out,
             media,
+            policy,
+            pins: Arc::default(),
             pending_ice: HashMap::new(),
             active: HashMap::new(),
         }
@@ -106,24 +118,67 @@ impl Sessions {
     fn start(&mut self, sid: String, body: serde_json::Value) {
         let ice = self.pending_ice.remove(&sid).unwrap_or_default();
         let viewer = serde_json::from_value::<AgentSessionRequest>(body)
-            .ok()
-            .map(|r| r.viewer);
+            .map(|r| r.viewer)
+            .unwrap_or(ViewerInfo {
+                email: "someone".into(),
+                ip: "unknown".into(),
+                user_agent: String::new(),
+            });
         if !self.active.is_empty() {
-            self.reject(&sid, "busy", "this computer is already being viewed".into());
+            self.reject(&sid, "busy", "this computer is already in a session".into());
             return;
         }
-        // M6 adds the consent prompt and "being viewed" banner; until then the agent logs it.
-        match &viewer {
-            Some(v) => {
-                tracing::warn!(sid = %sid, viewer = %v.email, ip = %v.ip, "viewer connecting to this screen")
+        let gate = match &self.policy {
+            AccessPolicy::Unattended {
+                pin_hash: Some(hash),
+            } => {
+                if let Some(wait) = self
+                    .pins
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .locked_for()
+                {
+                    let mins = wait.as_secs().div_ceil(60);
+                    self.reject(
+                        &sid,
+                        "pin_locked",
+                        format!("too many wrong PINs; try again in {mins} min"),
+                    );
+                    return;
+                }
+                Some(PinGate {
+                    hash: hash.clone(),
+                    guard: Arc::clone(&self.pins),
+                })
             }
-            None => tracing::warn!(sid = %sid, "viewer connecting to this screen"),
-        }
+            _ => None,
+        };
+        let controlling = !matches!(self.media.input, InputMode::Off);
+        let verb = if controlling { "control" } else { "view" };
+        tracing::warn!(sid = %sid, viewer = %viewer.email, ip = %viewer.ip, "remote {verb} requested");
 
         let (tx, rx) = mpsc::unbounded_channel();
         self.active.insert(sid.clone(), tx.clone());
-        let (out, media) = (self.out.clone(), self.media.clone());
+        let (out, media, policy) = (self.out.clone(), self.media.clone(), self.policy.clone());
         tokio::spawn(async move {
+            if policy == AccessPolicy::Attended {
+                let title = format!("Allow remote {verb}?");
+                let message = consent_message(&viewer, verb);
+                let decision = ui::ask_consent(&title, &message, CONSENT_TIMEOUT).await;
+                tracing::warn!(sid = %sid, viewer = %viewer.email, ?decision, "consent decision");
+                if let Some((reason, msg)) = rejection_for(&decision) {
+                    send(
+                        &out,
+                        MessageType::SessionReject,
+                        &sid,
+                        SessionReason {
+                            reason: reason.into(),
+                            message: msg,
+                        },
+                    );
+                    return;
+                }
+            }
             // Opening the source checks OS permission; do it before accepting.
             let opts = media.clone();
             let source = tokio::task::spawn_blocking(move || open_source(&opts)).await;
@@ -170,9 +225,100 @@ impl Sessions {
                 &out,
                 MessageType::SessionAccept,
                 &sid,
-                serde_json::json!({}),
+                serde_json::json!({ "pin_required": gate.is_some() }),
             );
-            run_session(sid, ice, capturer, media, out, tx, rx).await;
+            let banner =
+                (policy != AccessPolicy::Automatic).then(|| banner_text(&viewer, controlling));
+            let cfg = SessionConfig {
+                sid,
+                ice_servers: ice,
+                media,
+                gate,
+                banner,
+            };
+            run_session(cfg, capturer, out, tx, rx).await;
         });
+    }
+}
+
+fn consent_message(viewer: &ViewerInfo, verb: &str) -> String {
+    let browser: String = viewer.user_agent.chars().take(80).collect();
+    format!(
+        "{} wants to {verb} this computer.\n\nConnecting from {}{}.\n\nOnly allow this if you are expecting it.",
+        viewer.email,
+        viewer.ip,
+        if browser.is_empty() {
+            String::new()
+        } else {
+            format!("\n{browser}")
+        },
+    )
+}
+
+fn banner_text(viewer: &ViewerInfo, controlling: bool) -> String {
+    format!(
+        "{} is {} this computer",
+        viewer.email,
+        if controlling {
+            "controlling"
+        } else {
+            "viewing"
+        }
+    )
+}
+
+/// Maps a consent decision to a session rejection (None = allowed).
+fn rejection_for(decision: &Consent) -> Option<(&'static str, String)> {
+    match decision {
+        Consent::Allowed => None,
+        Consent::Denied => Some(("declined", "the person at the computer declined".into())),
+        Consent::TimedOut => Some(("consent_timeout", "no one answered at the computer".into())),
+        Consent::Unavailable(e) => Some((
+            "consent_unavailable",
+            format!(
+                "could not ask at the computer ({e}); set up `carson-agent unattended on --pin` for unattended access"
+            ),
+        )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_explicit_allow_proceeds() {
+        assert_eq!(rejection_for(&Consent::Allowed), None);
+        assert_eq!(rejection_for(&Consent::Denied).unwrap().0, "declined");
+        assert_eq!(
+            rejection_for(&Consent::TimedOut).unwrap().0,
+            "consent_timeout"
+        );
+        assert_eq!(
+            rejection_for(&Consent::Unavailable("no GUI".into()))
+                .unwrap()
+                .0,
+            "consent_unavailable"
+        );
+    }
+
+    #[test]
+    fn prompt_and_banner_name_the_viewer() {
+        let v = ViewerInfo {
+            email: "ana@x.com".into(),
+            ip: "203.0.113.9".into(),
+            user_agent: "Chrome".into(),
+        };
+        let m = consent_message(&v, "control");
+        assert!(
+            m.starts_with("ana@x.com wants to control this computer.")
+                && m.contains("203.0.113.9")
+                && m.contains("Chrome")
+        );
+        assert_eq!(
+            banner_text(&v, true),
+            "ana@x.com is controlling this computer"
+        );
+        assert_eq!(banner_text(&v, false), "ana@x.com is viewing this computer");
     }
 }

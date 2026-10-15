@@ -5,6 +5,7 @@ mod api;
 mod backoff;
 mod config;
 mod connection;
+mod consent;
 mod control;
 mod identity;
 mod keyframe;
@@ -12,6 +13,7 @@ mod keystore;
 mod media;
 mod peer;
 mod sessions;
+mod ui;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -37,6 +39,8 @@ COMMANDS:
     capture-check [MEDIA OPTIONS]         Check screen capture works (permission, frame rate)
     status                                Show pairing state
     unpair                                Forget this computer's identity (local only)
+    unattended on [--pin] | off           Allow connections without approval at this computer
+                                          (optionally protected by a 6-10 digit PIN)
 
 MEDIA OPTIONS:
     --fps <N>              Capture/encode frame rate (default 30)
@@ -65,6 +69,12 @@ enum Command {
     CaptureCheck(media::MediaOptions),
     Status,
     Unpair,
+    Unattended {
+        enable: bool,
+        pin: bool,
+    },
+    /// Hidden: host UI helper process (consent prompt / banner), spawned by `run`.
+    Ui(Vec<String>),
     Help,
     Version,
 }
@@ -83,6 +93,8 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Cli> {
     let mut media = media::MediaOptions::default();
     let mut media_flags = false;
     let mut input_explicit = false;
+    let mut unattended: Option<bool> = None;
+    let mut pin = false;
     fn number<T>(flag: &str, v: String, min: T, max: T) -> Result<T>
     where
         T: std::str::FromStr + PartialOrd + std::fmt::Display,
@@ -163,9 +175,22 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Cli> {
                 media_flags = true;
                 media.clipboard = false;
             }
-            "pair" | "run" | "capture-check" | "status" | "unpair" if command.is_none() => {
+            "pair" | "run" | "capture-check" | "status" | "unpair" | "unattended"
+                if command.is_none() =>
+            {
                 command = Some(arg)
             }
+            "ui" if command.is_none() => {
+                return Ok(Cli {
+                    command: Command::Ui(args.collect()),
+                    config_dir,
+                    json_logs,
+                });
+            }
+            "on" | "off" if command.as_deref() == Some("unattended") && unattended.is_none() => {
+                unattended = Some(arg == "on");
+            }
+            "--pin" => pin = true,
             other => bail!("unexpected argument {other:?} (try --help)"),
         }
     }
@@ -183,6 +208,12 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Cli> {
         Some(c) if media_flags => {
             bail!("media options only apply to run and capture-check, not {c}")
         }
+        Some("unattended") => {
+            let enable = unattended.context("unattended needs on or off")?;
+            anyhow::ensure!(enable || !pin, "--pin only applies to unattended on");
+            Command::Unattended { enable, pin }
+        }
+        Some(c) if pin => bail!("--pin only applies to unattended on, not {c}"),
         Some("status") => Command::Status,
         Some("unpair") => Command::Unpair,
         Some(_) => unreachable!(),
@@ -260,6 +291,8 @@ async fn pair(dir: PathBuf, server: &str, name: Option<String>) -> Result<()> {
                         server_url: server,
                         device_id: device_id.clone(),
                         name,
+                        unattended: false,
+                        pin_hash: None,
                     },
                 )?;
                 println!("Paired as {device_id}. Start the agent with: carson-agent run");
@@ -287,7 +320,37 @@ fn load_paired(dir: &std::path::Path) -> Result<(AgentConfig, DeviceKey)> {
 async fn run(dir: PathBuf, media: media::MediaOptions) -> Result<()> {
     let (cfg, key) = load_paired(&dir)?;
     tracing::info!(server = %cfg.server_url, device_id = %cfg.device_id, version = VERSION, "starting");
-    let agent = connection::Agent::new(Api::new(&cfg.server_url)?, key, cfg.device_id, media);
+    // Only a synthetic stream with no real input may skip consent and the banner.
+    let policy = if media.source == media::Source::TestPattern
+        && !matches!(media.input, media::InputMode::Native)
+    {
+        consent::AccessPolicy::Automatic
+    } else {
+        cfg.access_policy()
+    };
+    match &policy {
+        consent::AccessPolicy::Attended => {
+            tracing::info!("attended mode: each connection must be allowed at this computer")
+        }
+        consent::AccessPolicy::Unattended { pin_hash: Some(_) } => {
+            tracing::info!("unattended mode with PIN")
+        }
+        consent::AccessPolicy::Unattended { pin_hash: None } => {
+            tracing::warn!(
+                "unattended mode WITHOUT a PIN: anyone signed in to your account can connect"
+            )
+        }
+        consent::AccessPolicy::Automatic => {
+            tracing::info!("test pattern: no consent prompt or banner")
+        }
+    }
+    let agent = connection::Agent::new(
+        Api::new(&cfg.server_url)?,
+        key,
+        cfg.device_id,
+        media,
+        policy,
+    );
     tokio::select! {
         res = agent.run() => res,
         _ = tokio::signal::ctrl_c() => {
@@ -345,12 +408,51 @@ fn status(dir: PathBuf) -> Result<()> {
             let has_key = keystore::default_store(&cfg.server_url, &dir)?
                 .load()?
                 .is_some();
+            let access = match (cfg.unattended, cfg.pin_hash.is_some()) {
+                (false, _) => "attended (each connection must be allowed here)",
+                (true, true) => "unattended, PIN required",
+                (true, false) => "unattended, no PIN",
+            };
             println!(
-                "paired\n  server:    {}\n  device id: {}\n  name:      {}\n  key:       {}",
+                "paired\n  server:    {}\n  device id: {}\n  name:      {}\n  key:       {}\n  access:    {}",
                 cfg.server_url,
                 cfg.device_id,
                 cfg.name,
-                if has_key { "present" } else { "MISSING" }
+                if has_key { "present" } else { "MISSING" },
+                access
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Turns unattended access on or off. Must be run at this computer: it is never remotely settable.
+fn set_unattended(dir: PathBuf, enable: bool, with_pin: bool) -> Result<()> {
+    let mut cfg =
+        config::load(&dir)?.context("not paired yet; run `carson-agent pair --server <URL>`")?;
+    cfg.unattended = enable;
+    cfg.pin_hash = None;
+    if enable && with_pin {
+        let pin = rpassword::prompt_password("New PIN (6-10 digits): ")?;
+        consent::validate_pin(&pin)?;
+        let again = rpassword::prompt_password("Repeat PIN: ")?;
+        anyhow::ensure!(pin == again, "PINs do not match");
+        cfg.pin_hash = Some(consent::hash_pin(&pin)?);
+    }
+    config::save(&dir, &cfg)?;
+    match (enable, cfg.pin_hash.is_some()) {
+        (false, _) => {
+            println!("Unattended access is off: every connection must be allowed at this computer.")
+        }
+        (true, true) => println!(
+            "Unattended access is on. Viewers must enter the PIN. Restart `carson-agent run` to apply."
+        ),
+        (true, false) => {
+            println!(
+                "Unattended access is on WITHOUT a PIN: anyone signed in to your account can connect."
+            );
+            println!(
+                "Consider `carson-agent unattended on --pin`. Restart `carson-agent run` to apply."
             );
         }
     }
@@ -405,6 +507,8 @@ async fn main() -> ExitCode {
         Command::CaptureCheck(media) => capture_check(&media).await,
         Command::Status => status(dir),
         Command::Unpair => unpair(dir),
+        Command::Unattended { enable, pin } => set_unattended(dir, enable, pin),
+        Command::Ui(args) => ui::helper_main(&args),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
