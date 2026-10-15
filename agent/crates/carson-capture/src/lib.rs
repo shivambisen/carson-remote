@@ -9,6 +9,8 @@ use std::time::{Duration, Instant};
 #[cfg(target_os = "macos")]
 mod macos;
 mod test_pattern;
+#[cfg(target_os = "windows")]
+mod windows;
 
 pub use test_pattern::TestPattern;
 
@@ -63,17 +65,70 @@ impl std::fmt::Display for PermissionDenied {
 
 impl std::error::Error for PermissionDenied {}
 
+/// A display that can be captured, in the order used by [`CaptureOptions::display_index`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct DisplayInfo {
+    pub index: usize,
+    pub name: String,
+    /// Native size in pixels.
+    pub width: u32,
+    pub height: u32,
+    pub primary: bool,
+    /// Position and size in the OS's global input coordinate space
+    /// (macOS: points; Windows: virtual-desktop pixels), for mapping pointer input.
+    pub bounds: (f64, f64, f64, f64),
+}
+
+/// Lists displays. Needs the same permission as capturing on macOS.
+pub fn displays() -> anyhow::Result<Vec<DisplayInfo>> {
+    #[cfg(target_os = "macos")]
+    {
+        macos::displays()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        windows::displays()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        anyhow::bail!("display enumeration is not implemented on this OS yet")
+    }
+}
+
 /// Starts capturing a display.
 pub fn screen(opts: &CaptureOptions) -> anyhow::Result<Box<dyn Capturer>> {
     #[cfg(target_os = "macos")]
     {
         Ok(Box::new(macos::ScreenCapturer::start(opts)?))
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        Ok(Box::new(windows::ScreenCapturer::start(opts)?))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = opts;
-        anyhow::bail!("screen capture is not implemented on this OS yet (Windows lands in M4)")
+        anyhow::bail!(
+            "screen capture is not implemented on this OS yet (Linux comes after Windows/macOS)"
+        )
     }
+}
+
+/// Nearest-neighbour downscale of tightly packed BGRA (used where the OS cannot scale for
+/// us, e.g. Windows Graphics Capture). GPU scaling replaces this in M7.
+#[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+pub(crate) fn downscale_bgra(src: &[u8], sw: usize, sh: usize, dw: usize, dh: usize) -> Vec<u8> {
+    let mut out = vec![0u8; dw * dh * 4];
+    for y in 0..dh {
+        let sy = y * sh / dh;
+        let src_row = &src[sy * sw * 4..(sy + 1) * sw * 4];
+        let dst_row = &mut out[y * dw * 4..(y + 1) * dw * 4];
+        for x in 0..dw {
+            let sx = x * sw / dw;
+            dst_row[x * 4..x * 4 + 4].copy_from_slice(&src_row[sx * 4..sx * 4 + 4]);
+        }
+    }
+    out
 }
 
 /// Fits `width x height` into `max_width`, preserving aspect ratio, with even dimensions
@@ -120,6 +175,17 @@ mod tests {
         assert_eq!(scaled_size(3024, 1964, 1920), (1920, 1246));
         assert_eq!(scaled_size(1511, 983, 1920), (1510, 982));
         assert_eq!(scaled_size(1, 1, 1920), (2, 2));
+    }
+
+    #[test]
+    fn downscale_picks_nearest_pixels() {
+        // 4x2 source, each pixel's blue channel = its x + 10*y.
+        let src: Vec<u8> = (0..2)
+            .flat_map(|y| (0..4).flat_map(move |x| [x + 10 * y, 0, 0, 255]))
+            .collect();
+        let out = downscale_bgra(&src, 4, 2, 2, 1);
+        assert_eq!(out, vec![0, 0, 0, 255, 2, 0, 0, 255]);
+        assert_eq!(downscale_bgra(&src, 4, 2, 4, 2), src, "same size is a copy");
     }
 
     #[test]

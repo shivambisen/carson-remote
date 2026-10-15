@@ -12,4 +12,9 @@ anyhow = "1"
 workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
+core-graphics = "0.25.0"
 screencapturekit = { version = "11.0.0", features = ["macos_14_0"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-capture = "2.0.1"
+windows = { version = "0.62.2", features = ["Win32_Graphics_Gdi", "Win32_Foundation"] }

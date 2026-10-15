@@ -9,7 +9,38 @@ use screencapturekit::cm::{CMSampleBufferExt, SCFrameStatus};
 use screencapturekit::cv::CVPixelBufferLockFlags;
 use screencapturekit::prelude::*;
 
-use crate::{CaptureOptions, Capturer, Frame, FrameSlot, PermissionDenied, scaled_size};
+use crate::{
+    CaptureOptions, Capturer, DisplayInfo, Frame, FrameSlot, PermissionDenied, scaled_size,
+};
+
+/// Lists displays in ScreenCaptureKit order (the order `display_index` refers to).
+pub fn displays() -> Result<Vec<DisplayInfo>> {
+    let content = SCShareableContent::get().map_err(|e| {
+        anyhow::Error::new(PermissionDenied).context(format!("list displays: {e:?}"))
+    })?;
+    Ok(content
+        .displays()
+        .iter()
+        .enumerate()
+        .map(|(index, d)| {
+            let cg = core_graphics::display::CGDisplay::new(d.display_id());
+            let b = cg.bounds();
+            let primary = cg.is_main();
+            DisplayInfo {
+                index,
+                name: format!(
+                    "Display {}{}",
+                    index + 1,
+                    if primary { " (main)" } else { "" }
+                ),
+                width: d.width(),
+                height: d.height(),
+                primary,
+                bounds: (b.origin.x, b.origin.y, b.size.width, b.size.height),
+            }
+        })
+        .collect())
+}
 
 pub struct ScreenCapturer {
     stream: SCStream,
