@@ -3,18 +3,24 @@ import { api, ApiError, loginUrl, type Device, type User } from "./api";
 import { h } from "./dom";
 import { osLabel, timeAgo } from "./format";
 import { formatCode, isCompleteCode } from "./pairing";
+import { describeReason, ViewerSession } from "./session";
 import { PresenceClient, type ConnectionStatus } from "./signaling";
+import { summarize, type StatsSample } from "./stats";
 
 const app = document.querySelector<HTMLElement>("#app")!;
 let presence: PresenceClient | null = null;
+let viewing: { session: ViewerSession; timer: ReturnType<typeof setInterval> } | null = null;
 let user: User | null = null;
 
-type Route = { page: "login" | "devices" | "pair"; params: URLSearchParams };
+type Route = { page: "login" | "devices" | "pair" | "view"; params: URLSearchParams; deviceId?: string };
 
 function parseRoute(): Route {
   const [path = "", query = ""] = location.hash.replace(/^#/, "").split("?");
+  const params = new URLSearchParams(query);
+  const view = /^\/view\/([A-Za-z0-9_]+)$/.exec(path);
+  if (view) return { page: "view", params, deviceId: view[1] };
   const page = path === "/login" ? "login" : path === "/pair" ? "pair" : "devices";
-  return { page, params: new URLSearchParams(query) };
+  return { page, params };
 }
 
 function render(...nodes: Node[]): void {
@@ -103,6 +109,7 @@ function deviceRow(d: Device): HTMLElement {
         `${osLabel(d.os)} · ${d.online ? "Online" : `Last seen ${timeAgo(d.last_seen_at)}`}${d.agent_version ? ` · agent ${d.agent_version}` : ""}`,
       ),
     ),
+    d.online && h("a", { class: "button small", href: `#/view/${encodeURIComponent(d.id)}` }, "View"),
   );
 }
 
@@ -141,6 +148,85 @@ function showDevices(): void {
   );
   presence.start();
 }
+
+function showView(deviceId: string): void {
+  stopPresence();
+  stopViewing();
+  const video = h("video", { autoplay: true, playsinline: true, muted: true, class: "screen" });
+  const overlay = h("div", { class: "overlay" }, "Connecting…");
+  const stats = h("pre", { class: "stats", hidden: true });
+  const stage = h("div", { class: "stage" }, video, overlay, stats);
+  const toggleStats = () => (stats.hidden = !stats.hidden);
+  const fullscreen = () => void (document.fullscreenElement ? document.exitFullscreen() : stage.requestFullscreen()).catch(() => {});
+  render(
+    h(
+      "div",
+      { class: "viewer" },
+      h(
+        "header",
+        { class: "bar" },
+        h("a", { class: "brand", href: "#/devices", onclick: () => stopViewing() }, "← carson"),
+        h(
+          "div",
+          { class: "row" },
+          h("span", { class: "status", id: "view-status" }, "Connecting"),
+          h("button", { class: "secondary small", onclick: toggleStats, title: "Ctrl+Alt+Shift+D" }, "Stats"),
+          h("button", { class: "secondary small", onclick: fullscreen }, "Fullscreen"),
+          h("button", { class: "small", onclick: () => { stopViewing(); location.hash = "#/devices"; } }, "Disconnect"),
+        ),
+      ),
+      stage,
+    ),
+  );
+  const statusEl = document.querySelector<HTMLElement>("#view-status")!;
+  const session = new ViewerSession(deviceId, video, (s) => {
+    if (s.kind === "connecting") {
+      overlay.hidden = false;
+      overlay.textContent = s.detail;
+      statusEl.textContent = "Connecting";
+    } else if (s.kind === "live") {
+      overlay.hidden = true;
+      statusEl.textContent = "Live · view only";
+      statusEl.className = "status live";
+    } else {
+      overlay.hidden = false;
+      overlay.replaceChildren(
+        h("p", {}, describeReason(s.reason, s.message)),
+        h("a", { class: "button small", href: "#/devices" }, "Back to devices"),
+      );
+      statusEl.textContent = "Ended";
+      statusEl.className = "status";
+    }
+  });
+  let prev: StatsSample | null = null;
+  const timer = setInterval(() => {
+    const pc = session.peer;
+    if (!pc || stats.hidden) return;
+    void pc.getStats().then((report) => {
+      const { stats: st, sample } = summarize(report as unknown as Parameters<typeof summarize>[0], prev, performance.now());
+      prev = sample;
+      stats.textContent =
+        `${st.width}x${st.height} @ ${st.fps} fps\n` +
+        `${(st.kbps / 1000).toFixed(2)} Mbps\n` +
+        `RTT ${st.rttMs ?? "–"} ms · jitter buf ${st.jitterBufferMs ?? "–"} ms\n` +
+        `decode ${st.decodeMs ?? "–"} ms · lost ${st.packetsLost}\n` +
+        `path ${st.path} (${st.candidateType})`;
+    });
+  }, 1000);
+  viewing = { session, timer };
+  session.start();
+}
+
+function stopViewing(): void {
+  if (!viewing) return;
+  clearInterval(viewing.timer);
+  viewing.session.stop();
+  viewing = null;
+}
+
+document.addEventListener("keydown", (e) => {
+  if (e.ctrlKey && e.altKey && e.shiftKey && e.code === "KeyD") document.querySelector<HTMLElement>(".stats")?.toggleAttribute("hidden");
+});
 
 function showPair(params: URLSearchParams): void {
   stopPresence();
@@ -216,6 +302,7 @@ async function logout(): Promise<void> {
 
 async function route(): Promise<void> {
   const r = parseRoute();
+  if (r.page !== "view") stopViewing();
   if (r.page === "login") return showLogin(r.params);
   if (!user) {
     try {
@@ -229,6 +316,7 @@ async function route(): Promise<void> {
     }
   }
   if (r.page === "pair") showPair(r.params);
+  else if (r.page === "view" && r.deviceId) showView(r.deviceId);
   else showDevices();
 }
 
