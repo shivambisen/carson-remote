@@ -320,13 +320,13 @@ fn load_paired(dir: &std::path::Path) -> Result<(AgentConfig, DeviceKey)> {
 async fn run(dir: PathBuf, media: media::MediaOptions) -> Result<()> {
     let (cfg, key) = load_paired(&dir)?;
     tracing::info!(server = %cfg.server_url, device_id = %cfg.device_id, version = VERSION, "starting");
-    // Only a synthetic stream with no real input may skip consent and the banner.
-    let policy = if media.source == media::Source::TestPattern
-        && !matches!(media.input, media::InputMode::Native)
-    {
-        consent::AccessPolicy::Automatic
-    } else {
-        cfg.access_policy()
+    // A synthetic stream with no real input skips the prompt (nothing real is shared), but a
+    // configured unattended PIN is still enforced.
+    let synthetic = media.source == media::Source::TestPattern
+        && !matches!(media.input, media::InputMode::Native);
+    let policy = match cfg.access_policy() {
+        consent::AccessPolicy::Attended if synthetic => consent::AccessPolicy::Automatic,
+        other => other,
     };
     match &policy {
         consent::AccessPolicy::Attended => {
@@ -433,10 +433,20 @@ fn set_unattended(dir: PathBuf, enable: bool, with_pin: bool) -> Result<()> {
     cfg.unattended = enable;
     cfg.pin_hash = None;
     if enable && with_pin {
-        let pin = rpassword::prompt_password("New PIN (6-10 digits): ")?;
+        use std::io::IsTerminal;
+        let pin = if std::io::stdin().is_terminal() {
+            let pin = rpassword::prompt_password("New PIN (6-10 digits): ")?;
+            consent::validate_pin(&pin)?;
+            let again = rpassword::prompt_password("Repeat PIN: ")?;
+            anyhow::ensure!(pin == again, "PINs do not match");
+            pin
+        } else {
+            // Scripted setup: `echo 123456 | carson-agent unattended on --pin`.
+            let mut line = String::new();
+            std::io::stdin().read_line(&mut line)?;
+            line.trim().to_owned()
+        };
         consent::validate_pin(&pin)?;
-        let again = rpassword::prompt_password("Repeat PIN: ")?;
-        anyhow::ensure!(pin == again, "PINs do not match");
         cfg.pin_hash = Some(consent::hash_pin(&pin)?);
     }
     config::save(&dir, &cfg)?;

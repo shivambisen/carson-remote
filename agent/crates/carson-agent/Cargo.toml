@@ -15,6 +15,7 @@ base64 = "0.23.1"
 bytes = "1.12.1"
 carson-capture = { version = "0.1.0", path = "../carson-capture" }
 carson-encode = { version = "0.1.0", path = "../carson-encode" }
+carson-hostui = { version = "0.1.0", path = "../carson-hostui" }
 carson-input = { version = "0.1.0", path = "../carson-input" }
 carson-proto = { path = "../carson-proto" }
 dirs = "7.0.0"
@@ -48,17 +49,3 @@ windows-native-keyring-store = "1.1.0"
 
 [dev-dependencies]
 tokio = { version = "1.53.3", features = ["test-util"] }
-
-# Host UI helper (consent prompt, "being controlled" banner).
-[target.'cfg(target_os = "macos")'.dependencies.objc2]
-version = "0.6.5"
-
-[target.'cfg(target_os = "macos")'.dependencies.objc2-foundation]
-version = "0.3.2"
-
-[target.'cfg(target_os = "macos")'.dependencies.objc2-app-kit]
-version = "0.3.2"
-
-[target.'cfg(target_os = "windows")'.dependencies.windows]
-version = "0.62.2"
-features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_System_LibraryLoader"]

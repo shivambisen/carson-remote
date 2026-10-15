@@ -369,6 +369,7 @@ dependencies = [
  "bytes",
  "carson-capture",
  "carson-encode",
+ "carson-hostui",
  "carson-input",
  "carson-proto",
  "dirs",
@@ -377,9 +378,6 @@ dependencies = [
  "gethostname",
  "getrandom 0.4.3",
  "keyring-core",
- "objc2",
- "objc2-app-kit",
- "objc2-foundation",
  "reqwest",
  "rpassword",
  "rtc",
@@ -391,7 +389,6 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "webrtc",
- "windows",
  "windows-native-keyring-store",
 ]
 
@@ -412,6 +409,17 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "openh264",
+]
+
+[[package]]
+name = "carson-hostui"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "windows",
 ]
 
 [[package]]

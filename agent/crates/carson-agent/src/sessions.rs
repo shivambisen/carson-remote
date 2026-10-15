@@ -12,7 +12,7 @@ use carson_proto::ViewerInfo;
 
 use crate::consent::{AccessPolicy, CONSENT_TIMEOUT, PinGuard};
 use crate::control::PinGate;
-use crate::media::{InputMode, MediaOptions, open_source};
+use crate::media::{InputMode, MediaOptions, Source, open_source};
 use crate::peer::{Outbox, SessionConfig, SessionEvent, run_session, send};
 use crate::ui::{self, Consent};
 
@@ -227,8 +227,10 @@ impl Sessions {
                 &sid,
                 serde_json::json!({ "pin_required": gate.is_some() }),
             );
-            let banner =
-                (policy != AccessPolicy::Automatic).then(|| banner_text(&viewer, controlling));
+            // The banner is skipped only for a synthetic stream with no real input.
+            let synthetic =
+                media.source == Source::TestPattern && !matches!(media.input, InputMode::Native);
+            let banner = (!synthetic).then(|| banner_text(&viewer, controlling));
             let cfg = SessionConfig {
                 sid,
                 ice_servers: ice,
