@@ -239,7 +239,18 @@ Viewer: `vite`, `typescript`, `vitest`. Nothing else at runtime.
   royalty-covered. Don't statically bundle x264 or ffmpeg's H.264 encoder.
 - **OAuth app review:** Google sign-in with only basic scopes is free, but may need consent-screen verification for public use.
 
-## 17. Future work (not in M1–M8)
+## 17. Implementation notes (as built)
+
+**M2:**
+- GitHub has no user OIDC, so it uses OAuth2 + `/user/emails` (primary **verified** email only). Google uses full OIDC (ID token verified, nonce checked). Both use PKCE and single-use, DB-stored `state` (10 min).
+- Identities are linked by provider-verified email, so Google + GitHub sign-ins with the same address are one account. Logins without a verified email are rejected.
+- Pairing codes: 8 letters from a 20-consonant alphabet (≈2.6·10¹⁰), stored hashed, 10-minute TTL. Lookups and approvals are rate limited per user and per IP (10/min). The approve screen shows the device name and OS before anything is bound.
+- Device auth: `POST /v1/device/challenge` → Ed25519 signature over `carson-device-auth:v1\n<device_id>\n<nonce>` → 15-minute bearer token (hashed at rest). Nonces are single-use, device-bound, and live 60 s. Cross-language test vector: `proto/device-auth.json`.
+- Key storage: macOS Keychain / Windows Credential Manager via `keyring-core`. **Linux uses a 0600 file** for now (Secret Service needs a desktop session), to be revisited in M8. `CARSON_AGENT_KEYSTORE=file` forces the file store (CI, e2e).
+- Presence: the server pings agents every 15 s, and a missed pong within 30 s marks them offline. The agent also pings and reconnects with 0.5→10 s jittered backoff. A second agent with the same identity replaces the first (close 4000), and the replaced agent exits instead of fighting.
+- Viewers get a `hello.ok` snapshot on every (re)connect, then `presence` deltas, so nothing is lost across reconnects.
+
+## 18. Future work (not in M1–M8)
 
 LAN-only serverless mode (mDNS), file transfer, audio, multi-viewer, a desktop viewer app, mobile viewer,
 login screen / UAC control, horizontal scaling (Redis presence, sticky WebSockets).
