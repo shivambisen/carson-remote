@@ -1,0 +1,9 @@
+{
+  "description": "Device auth signature: Ed25519 over message = \"carson-device-auth:v1\\n\" + device_id + \"\\n\" + nonce. Keys and signatures are base64url without padding.",
+  "device_id": "dev_fixture0000000000000000000",
+  "message": "carson-device-auth:v1\ndev_fixture0000000000000000000\nnonce-fixture",
+  "nonce": "nonce-fixture",
+  "public_key": "ebVWLo_mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ",
+  "seed_hex": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+  "signature": "ZMTz43sU1zmR0VUu85w9p9BUeonfB_n8rMKCH-ybbtJr3ZHUjQbQDlZtOA0D_3-m7TpRfZTk4XPIUnfcIwOQAA"
+}
