@@ -14,6 +14,7 @@ import (
 
 	"carson/server/internal/config"
 	"carson/server/internal/httpapi"
+	"carson/server/internal/store"
 )
 
 func main() {
@@ -30,17 +31,25 @@ func run() error {
 	}
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel}))
 	if cfg.Dev {
-		log.Warn("dev mode enabled; do not use in production")
-	}
-
-	srv := &http.Server{
-		Addr:              cfg.Addr,
-		Handler:           httpapi.New(log),
-		ReadHeaderTimeout: 10 * time.Second,
+		log.Warn("dev mode enabled: email-only dev login is ON; do not use in production")
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	st, err := store.Open(ctx, cfg.DBPath)
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer st.Close()
+	go cleanup(ctx, st, log)
+
+	api := httpapi.New(cfg, st, log)
+	srv := &http.Server{
+		Addr:              cfg.Addr,
+		Handler:           api.Handler,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
 
 	errc := make(chan error, 1)
 	go func() {
@@ -61,4 +70,20 @@ func run() error {
 		return err
 	}
 	return nil
+}
+
+// cleanup periodically deletes expired sessions, logins, pairings and tokens.
+func cleanup(ctx context.Context, st *store.Store, log *slog.Logger) {
+	t := time.NewTicker(10 * time.Minute)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if err := st.DeleteExpired(ctx, time.Now()); err != nil {
+				log.Error("cleanup expired rows", "err", err)
+			}
+		}
+	}
 }
