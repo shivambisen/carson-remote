@@ -1,5 +1,6 @@
 //! Keeps the agent connected to carson-server's signaling WebSocket so the device shows
-//! as online. Reconnects with backoff; stops only on errors that retrying cannot fix.
+//! as online, and carries session signaling. Reconnects with backoff; stops only on errors
+//! that retrying cannot fix. Running sessions survive signaling reconnects (media is P2P).
 
 use std::time::{Duration, Instant};
 
@@ -12,6 +13,9 @@ use carson_proto::{AgentHello, AgentHelloOk, Envelope, MessageType};
 use crate::api::{Api, ApiError};
 use crate::backoff::Backoff;
 use crate::identity::DeviceKey;
+use crate::media::MediaOptions;
+use crate::sessions::Sessions;
+use tokio::sync::mpsc;
 
 /// Server close code: another agent connected with this device's identity.
 const CLOSE_REPLACED: u16 = 4000;
@@ -32,12 +36,26 @@ enum Ended {
 }
 
 pub struct Agent {
-    pub api: Api,
-    pub key: DeviceKey,
-    pub device_id: String,
+    api: Api,
+    key: DeviceKey,
+    device_id: String,
+    sessions: std::sync::Mutex<Sessions>,
+    /// Outgoing signaling, kept across reconnects.
+    outbox: tokio::sync::Mutex<mpsc::UnboundedReceiver<Envelope>>,
 }
 
 impl Agent {
+    pub fn new(api: Api, key: DeviceKey, device_id: String, media: MediaOptions) -> Self {
+        let (tx, rx) = mpsc::unbounded_channel();
+        Self {
+            api,
+            key,
+            device_id,
+            sessions: std::sync::Mutex::new(Sessions::new(tx, media)),
+            outbox: tokio::sync::Mutex::new(rx),
+        }
+    }
+
     /// Runs until a fatal error. Cancel by dropping the future (e.g. on Ctrl-C).
     pub async fn run(&self) -> Result<()> {
         let mut backoff = Backoff::new(Duration::from_millis(500), Duration::from_secs(10));
@@ -108,8 +126,18 @@ impl Agent {
 
         let mut ping = tokio::time::interval(PING_INTERVAL);
         ping.tick().await; // first tick is immediate
+        let mut outbox = self.outbox.lock().await;
         loop {
             tokio::select! {
+                Some(env) = outbox.recv() => {
+                    let text = match serde_json::to_string(&env) {
+                        Ok(t) => t,
+                        Err(e) => return Ended::Fatal(e.into()),
+                    };
+                    if let Err(e) = ws.send(Message::text(text)).await {
+                        return Ended::Transient(e.into());
+                    }
+                }
                 _ = ping.tick() => {
                     if let Err(e) = ws.send(Message::Ping(Default::default())).await {
                         return Ended::Transient(e.into());
@@ -156,6 +184,12 @@ impl Agent {
                 }
                 Err(e) => tracing::warn!(error = %e, "bad hello.ok"),
             },
+            Some(kind) if Sessions::handles(kind) => {
+                self.sessions
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .handle(env);
+            }
             _ => tracing::debug!(kind = %env.kind, "ignoring message"),
         }
     }

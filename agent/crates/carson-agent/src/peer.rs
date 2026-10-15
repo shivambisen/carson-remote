@@ -1,0 +1,460 @@
+//! One remote-viewing session: a WebRTC peer connection that streams this machine's screen.
+//!
+//! Each session is an actor task owning its `PeerConnection` and media pipeline. Signaling
+//! messages and connection-state changes arrive as [`SessionEvent`]s; outgoing signaling
+//! goes to the shared outbox (the WebSocket writer).
+
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant};
+
+use anyhow::{Context, Result};
+use bytes::Bytes;
+use rtc::interceptor::Slot;
+use rtc::media::Sample;
+use rtc::peer_connection::configuration::media_engine::MIME_TYPE_H264;
+use rtc::rtp_transceiver::rtp_sender::{
+    RTCPFeedback, RTCRtpCodec, RTCRtpCodecParameters, RTCRtpCodingParameters,
+    RTCRtpEncodingParameters, RtpCodecKind,
+};
+use tokio::sync::mpsc;
+use webrtc::media_stream::MediaStreamTrack;
+use webrtc::media_stream::track_local::static_sample::TrackLocalStaticSample;
+use webrtc::media_stream::track_local::{TrackLocal, TrackLocalEvent};
+use webrtc::peer_connection::{
+    MediaEngine, PeerConnection, PeerConnectionBuilder, PeerConnectionEventHandler,
+    RTCConfigurationBuilder, RTCIceCandidateInit, RTCIceServer, RTCPeerConnectionIceEvent,
+    RTCPeerConnectionState, RTCSessionDescription, Registry, register_default_interceptors,
+};
+
+use carson_proto::{Envelope, MessageType};
+
+use crate::keyframe::{KeyframeRequestForwarder, is_keyframe_request};
+use crate::media::{MediaOptions, PipelineControl, spawn_pipeline};
+
+/// Outgoing signaling messages (drained by the WebSocket loop).
+pub type Outbox = mpsc::UnboundedSender<Envelope>;
+
+/// Sends a session-scoped message; a closed outbox means we are shutting down.
+pub fn send(out: &Outbox, kind: MessageType, sid: &str, body: impl serde::Serialize) {
+    match Envelope::new(kind, body) {
+        Ok(mut env) => {
+            env.sid = Some(sid.to_owned());
+            let _ = out.send(env);
+        }
+        Err(e) => tracing::error!(error = %e, "serialize signaling message"),
+    }
+}
+
+#[derive(Debug)]
+pub enum SessionEvent {
+    Answer(Box<RTCSessionDescription>),
+    Candidate(RTCIceCandidateInit),
+    Connected,
+    /// The connection is gone; the reason is reported to the viewer.
+    Failed(&'static str),
+    /// The viewer (or server) ended the session.
+    RemoteEnd,
+}
+
+/// H.264 Constrained Baseline, which every browser decodes (often in hardware).
+pub fn h264_codec() -> RTCRtpCodecParameters {
+    let fb = |typ: &str, parameter: &str| RTCPFeedback {
+        typ: typ.into(),
+        parameter: parameter.into(),
+    };
+    RTCRtpCodecParameters {
+        rtp_codec: RTCRtpCodec {
+            mime_type: MIME_TYPE_H264.to_owned(),
+            clock_rate: 90_000,
+            channels: 0,
+            sdp_fmtp_line: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"
+                .to_owned(),
+            rtcp_feedback: vec![
+                fb("nack", ""),
+                fb("nack", "pli"),
+                fb("ccm", "fir"),
+                fb("transport-cc", ""),
+            ],
+        },
+        payload_type: 102,
+    }
+}
+
+/// Builds a peer connection configured for carson (H.264 only, keyframe requests forwarded).
+pub async fn build_peer(
+    ice_servers: Vec<RTCIceServer>,
+    handler: Arc<dyn PeerConnectionEventHandler>,
+) -> Result<Arc<dyn PeerConnection>> {
+    let mut media_engine = MediaEngine::default();
+    media_engine.register_codec(h264_codec(), RtpCodecKind::Video)?;
+    let registry = register_default_interceptors(Registry::new(), &mut media_engine)?
+        // Application-most, so the default interceptors see all inbound RTCP first.
+        .with(Slot::from(14_000), KeyframeRequestForwarder::default());
+    let config = RTCConfigurationBuilder::new()
+        .with_ice_servers(ice_servers)
+        .build();
+    let pc = PeerConnectionBuilder::new()
+        .with_configuration(config)
+        .with_media_engine(media_engine)
+        .with_interceptor_registry(registry)
+        .with_handler(handler)
+        // Wildcard = one socket per real interface, so host candidates work on the LAN.
+        .with_udp_addrs(vec!["0.0.0.0:0"])
+        .build()
+        .await?;
+    Ok(Arc::new(pc))
+}
+
+struct Handler {
+    sid: String,
+    out: Outbox,
+    events: mpsc::UnboundedSender<SessionEvent>,
+}
+
+#[async_trait::async_trait]
+impl PeerConnectionEventHandler for Handler {
+    async fn on_ice_candidate(&self, event: RTCPeerConnectionIceEvent) {
+        match event.candidate.to_json() {
+            Ok(init) => send(&self.out, MessageType::IceCandidate, &self.sid, init),
+            Err(e) => tracing::warn!(error = %e, "serialize local ICE candidate"),
+        }
+    }
+
+    async fn on_connection_state_change(&self, state: RTCPeerConnectionState) {
+        tracing::info!(sid = %self.sid, %state, "peer connection state");
+        let event = match state {
+            RTCPeerConnectionState::Connected => SessionEvent::Connected,
+            RTCPeerConnectionState::Failed => SessionEvent::Failed("connection_failed"),
+            RTCPeerConnectionState::Closed => SessionEvent::Failed("closed"),
+            // `Disconnected` can recover on its own; ICE restart arrives in M5.
+            _ => return,
+        };
+        let _ = self.events.send(event);
+    }
+}
+
+/// How long the viewer has to complete the WebRTC handshake.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Runs one session until it ends. Always tells the viewer why it ended.
+pub async fn run_session(
+    sid: String,
+    ice_servers: Vec<RTCIceServer>,
+    capturer: Box<dyn carson_capture::Capturer>,
+    media: MediaOptions,
+    out: Outbox,
+    events_tx: mpsc::UnboundedSender<SessionEvent>,
+    mut events: mpsc::UnboundedReceiver<SessionEvent>,
+) {
+    let reason = match session_inner(
+        &sid,
+        ice_servers,
+        capturer,
+        media,
+        &out,
+        events_tx,
+        &mut events,
+    )
+    .await
+    {
+        Ok(reason) => reason,
+        Err(e) => {
+            tracing::error!(sid = %sid, error = %format!("{e:#}"), "session failed");
+            "agent_error"
+        }
+    };
+    if reason != "remote_end" {
+        send(
+            &out,
+            MessageType::SessionEnd,
+            &sid,
+            serde_json::json!({ "reason": reason }),
+        );
+    }
+    tracing::info!(sid = %sid, reason, "session ended");
+}
+
+async fn session_inner(
+    sid: &str,
+    ice_servers: Vec<RTCIceServer>,
+    capturer: Box<dyn carson_capture::Capturer>,
+    media: MediaOptions,
+    out: &Outbox,
+    events_tx: mpsc::UnboundedSender<SessionEvent>,
+    events: &mut mpsc::UnboundedReceiver<SessionEvent>,
+) -> Result<&'static str> {
+    let handler = Arc::new(Handler {
+        sid: sid.to_owned(),
+        out: out.clone(),
+        events: events_tx,
+    });
+    let pc = build_peer(ice_servers, handler)
+        .await
+        .context("create peer connection")?;
+
+    let codec = h264_codec();
+    let ssrc = random_u32();
+    let track = Arc::new(TrackLocalStaticSample::new(
+        Instant::now(),
+        MediaStreamTrack::new(
+            "carson-screen".to_owned(),
+            "carson-screen-video".to_owned(),
+            "screen".to_owned(),
+            RtpCodecKind::Video,
+            vec![RTCRtpEncodingParameters {
+                rtp_coding_parameters: RTCRtpCodingParameters {
+                    ssrc: Some(ssrc),
+                    ..Default::default()
+                },
+                codec: codec.rtp_codec.clone(),
+                ..Default::default()
+            }],
+        ),
+    )?);
+    let sender = pc
+        .add_track(Arc::clone(&track) as Arc<dyn TrackLocal>)
+        .await?;
+
+    let offer = pc.create_offer(None).await?;
+    pc.set_local_description(offer.clone()).await?;
+    send(out, MessageType::SdpOffer, sid, &offer);
+
+    let ctl = PipelineControl::default();
+    let mut capturer = Some(capturer);
+    let mut streaming: Option<tokio::task::JoinHandle<()>> = None;
+    let deadline = tokio::time::sleep(CONNECT_TIMEOUT);
+    tokio::pin!(deadline);
+
+    let reason = loop {
+        let event = tokio::select! {
+            ev = events.recv() => ev,
+            _ = &mut deadline, if streaming.is_none() => break "connect_timeout",
+        };
+        match event {
+            None | Some(SessionEvent::RemoteEnd) => break "remote_end",
+            Some(SessionEvent::Failed(reason)) => break reason,
+            Some(SessionEvent::Answer(answer)) => pc
+                .set_remote_description(*answer)
+                .await
+                .context("apply answer")?,
+            Some(SessionEvent::Candidate(c)) => {
+                if let Err(e) = pc.add_ice_candidate(c).await {
+                    tracing::warn!(error = %e, "ignoring bad remote ICE candidate");
+                }
+            }
+            Some(SessionEvent::Connected) => {
+                if let Some(cap) = capturer.take() {
+                    let payload_type = sender
+                        .get_parameters()
+                        .await?
+                        .rtp_parameters
+                        .codecs
+                        .first()
+                        .map(|c| c.payload_type)
+                        .context("no negotiated codec")?;
+                    let frames = spawn_pipeline(cap, media.encoder, ctl.clone());
+                    streaming = Some(tokio::spawn(stream_frames(
+                        Arc::clone(&track),
+                        ssrc,
+                        payload_type,
+                        media.encoder.fps,
+                        frames,
+                    )));
+                    tokio::spawn(forward_keyframe_requests(Arc::clone(&track), ctl.clone()));
+                    tracing::info!(sid, "streaming started");
+                }
+            }
+        }
+    };
+
+    ctl.stop.store(true, Ordering::Relaxed);
+    if let Some(task) = streaming {
+        task.abort();
+    }
+    let _ = pc.close().await;
+    Ok(reason)
+}
+
+/// Writes encoded frames to the track, logging throughput every few seconds.
+async fn stream_frames(
+    track: Arc<TrackLocalStaticSample>,
+    ssrc: u32,
+    payload_type: u8,
+    fps: u32,
+    mut frames: mpsc::Receiver<crate::media::TimedFrame>,
+) {
+    let default_duration = Duration::from_secs(1) / fps.max(1);
+    let mut prev: Option<Instant> = None;
+    let (mut count, mut bytes, mut window) = (0u32, 0usize, Instant::now());
+    while let Some(timed) = frames.recv().await {
+        let duration = prev.map_or(default_duration, |p| {
+            timed.captured_at.saturating_duration_since(p)
+        });
+        prev = Some(timed.captured_at);
+        bytes += timed.frame.data.len();
+        count += 1;
+        let sample = Sample {
+            data: Bytes::from(timed.frame.data),
+            duration,
+            ..Sample::new(timed.captured_at)
+        };
+        if let Err(e) = track
+            .sample_writer(ssrc, payload_type)
+            .write_sample(&sample)
+            .await
+        {
+            tracing::warn!(error = %e, "write sample failed; stopping stream");
+            break;
+        }
+        if window.elapsed() >= Duration::from_secs(5) {
+            let secs = window.elapsed().as_secs_f64();
+            tracing::info!(
+                fps = format!("{:.1}", f64::from(count) / secs),
+                kbps = (bytes as f64 * 8.0 / secs / 1000.0) as u64,
+                size = format!("{}x{}", timed.frame.width, timed.frame.height),
+                "stream stats"
+            );
+            (count, bytes, window) = (0, 0, Instant::now());
+        }
+    }
+}
+
+/// Turns PLI/FIR from the viewer into an immediate keyframe.
+async fn forward_keyframe_requests(track: Arc<TrackLocalStaticSample>, ctl: PipelineControl) {
+    while let Some(event) = track.poll().await {
+        let TrackLocalEvent::OnRtcpPacket(packets) = event else {
+            continue;
+        };
+        if packets.iter().any(|p| is_keyframe_request(p.as_ref())) {
+            tracing::debug!("keyframe requested by viewer");
+            ctl.keyframe.store(true, Ordering::Relaxed);
+        }
+        if ctl.stop.load(Ordering::Relaxed) {
+            break;
+        }
+    }
+}
+
+fn random_u32() -> u32 {
+    let mut b = [0u8; 4];
+    let _ = getrandom::fill(&mut b);
+    u32::from_le_bytes(b)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::media::Source;
+    use std::sync::atomic::AtomicUsize;
+    use webrtc::media_stream::track_remote::{TrackRemote, TrackRemoteEvent};
+
+    /// A webrtc-rs peer standing in for the browser.
+    struct ViewerHandler {
+        candidates: mpsc::UnboundedSender<RTCIceCandidateInit>,
+        frames: Arc<AtomicUsize>,
+        packets: Arc<AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl PeerConnectionEventHandler for ViewerHandler {
+        async fn on_ice_candidate(&self, event: RTCPeerConnectionIceEvent) {
+            if let Ok(c) = event.candidate.to_json() {
+                let _ = self.candidates.send(c);
+            }
+        }
+
+        async fn on_track(&self, track: Arc<dyn TrackRemote>) {
+            let (frames, packets) = (Arc::clone(&self.frames), Arc::clone(&self.packets));
+            tokio::spawn(async move {
+                while let Some(ev) = track.poll().await {
+                    if let TrackRemoteEvent::OnRtpPacket(p) = ev {
+                        packets.fetch_add(1, Ordering::Relaxed);
+                        if p.header.marker {
+                            frames.fetch_add(1, Ordering::Relaxed); // last packet of a frame
+                        }
+                    }
+                }
+            });
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn streams_h264_to_a_webrtc_peer_over_real_ice() {
+        let (out_tx, mut out_rx) = mpsc::unbounded_channel::<Envelope>();
+        let (ev_tx, ev_rx) = mpsc::unbounded_channel();
+        let media = MediaOptions {
+            source: Source::TestPattern,
+            ..Default::default()
+        };
+        let capturer = crate::media::open_source(&media).unwrap();
+        let session = tokio::spawn(run_session(
+            "ses_test".into(),
+            vec![],
+            capturer,
+            media,
+            out_tx,
+            ev_tx.clone(),
+            ev_rx,
+        ));
+
+        let (cand_tx, mut cand_rx) = mpsc::unbounded_channel();
+        let frames = Arc::new(AtomicUsize::new(0));
+        let packets = Arc::new(AtomicUsize::new(0));
+        let viewer = build_peer(
+            vec![],
+            Arc::new(ViewerHandler {
+                candidates: cand_tx,
+                frames: Arc::clone(&frames),
+                packets: Arc::clone(&packets),
+            }),
+        )
+        .await
+        .unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while frames.load(Ordering::Relaxed) < 30 {
+            assert!(
+                Instant::now() < deadline,
+                "only {} frames ({} packets) arrived",
+                frames.load(Ordering::Relaxed),
+                packets.load(Ordering::Relaxed)
+            );
+            tokio::select! {
+                Some(env) = out_rx.recv() => match env.message_type() {
+                    Some(MessageType::SdpOffer) => {
+                        let offer: RTCSessionDescription = serde_json::from_value(env.body).unwrap();
+                        assert!(offer.sdp.contains("H264"), "offer must advertise H.264");
+                        viewer.set_remote_description(offer).await.unwrap();
+                        let answer = viewer.create_answer(None).await.unwrap();
+                        viewer.set_local_description(answer.clone()).await.unwrap();
+                        ev_tx.send(SessionEvent::Answer(Box::new(answer))).unwrap();
+                    }
+                    Some(MessageType::IceCandidate) => {
+                        let c: RTCIceCandidateInit = serde_json::from_value(env.body).unwrap();
+                        viewer.add_ice_candidate(c).await.unwrap();
+                    }
+                    Some(MessageType::SessionEnd) => panic!("session ended early: {}", env.body),
+                    other => panic!("unexpected {other:?}"),
+                },
+                Some(c) = cand_rx.recv() => { ev_tx.send(SessionEvent::Candidate(c)).unwrap(); }
+                _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+            }
+        }
+
+        // A viewer hanging up ends the session cleanly, without a session.end echo.
+        ev_tx.send(SessionEvent::RemoteEnd).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), session)
+            .await
+            .expect("session did not stop")
+            .unwrap();
+        while let Ok(env) = out_rx.try_recv() {
+            assert_ne!(
+                env.message_type(),
+                Some(MessageType::SessionEnd),
+                "no end echo on remote end"
+            );
+        }
+        let _ = viewer.close().await;
+    }
+}

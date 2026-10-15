@@ -6,7 +6,11 @@ mod backoff;
 mod config;
 mod connection;
 mod identity;
+mod keyframe;
 mod keystore;
+mod media;
+mod peer;
+mod sessions;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -28,9 +32,17 @@ USAGE:
 
 COMMANDS:
     pair --server <URL> [--name <NAME>]   Enroll this computer with your carson account
-    run                                   Stay online so your other devices can see this one
+    run [MEDIA OPTIONS]                   Stay online and share this screen with your viewers
+    capture-check [MEDIA OPTIONS]         Check screen capture works (permission, frame rate)
     status                                Show pairing state
     unpair                                Forget this computer's identity (local only)
+
+MEDIA OPTIONS:
+    --fps <N>              Capture/encode frame rate (default 30)
+    --max-width <PX>       Downscale wider screens to this width (default 1920)
+    --bitrate-kbps <N>     Target video bitrate (default 4000)
+    --display <N>          Display index, 0 = main (default 0)
+    --test-pattern         Stream a synthetic pattern instead of the screen
 
 OPTIONS:
     --config-dir <DIR>     State directory (default: OS config dir/carson, or $CARSON_AGENT_DIR)
@@ -40,20 +52,21 @@ OPTIONS:
 
 Logging verbosity follows RUST_LOG (default: info).";
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 enum Command {
     Pair {
         server: String,
         name: Option<String>,
     },
-    Run,
+    Run(media::MediaOptions),
+    CaptureCheck(media::MediaOptions),
     Status,
     Unpair,
     Help,
     Version,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 struct Cli {
     command: Command,
     config_dir: Option<PathBuf>,
@@ -64,6 +77,21 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Cli> {
     let mut args = args.into_iter();
     let mut command = None;
     let (mut server, mut name, mut config_dir, mut json_logs) = (None, None, None, false);
+    let mut media = media::MediaOptions::default();
+    let mut media_flags = false;
+    fn number<T>(flag: &str, v: String, min: T, max: T) -> Result<T>
+    where
+        T: std::str::FromStr + PartialOrd + std::fmt::Display,
+    {
+        let n: T = v
+            .parse()
+            .map_err(|_| anyhow::anyhow!("{flag} expects a number, got {v:?}"))?;
+        anyhow::ensure!(
+            n >= min && n <= max,
+            "{flag} must be between {min} and {max}"
+        );
+        Ok(n)
+    }
     while let Some(arg) = args.next() {
         let mut value = |flag: &str| args.next().with_context(|| format!("{flag} needs a value"));
         match arg.as_str() {
@@ -89,7 +117,33 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Cli> {
                 "text" => json_logs = false,
                 other => bail!("unknown log format {other:?} (use text or json)"),
             },
-            "pair" | "run" | "status" | "unpair" if command.is_none() => command = Some(arg),
+            "--fps" => {
+                media_flags = true;
+                let fps = number("--fps", value("--fps")?, 1u32, 120)?;
+                media.capture.fps = fps;
+                media.encoder.fps = fps;
+            }
+            "--max-width" => {
+                media_flags = true;
+                media.capture.max_width =
+                    number("--max-width", value("--max-width")?, 320usize, 7680)?;
+            }
+            "--bitrate-kbps" => {
+                media_flags = true;
+                media.encoder.bitrate_bps =
+                    number("--bitrate-kbps", value("--bitrate-kbps")?, 100u32, 100_000)? * 1000;
+            }
+            "--display" => {
+                media_flags = true;
+                media.capture.display_index = number("--display", value("--display")?, 0usize, 16)?;
+            }
+            "--test-pattern" => {
+                media_flags = true;
+                media.source = media::Source::TestPattern;
+            }
+            "pair" | "run" | "capture-check" | "status" | "unpair" if command.is_none() => {
+                command = Some(arg)
+            }
             other => bail!("unexpected argument {other:?} (try --help)"),
         }
     }
@@ -102,7 +156,11 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Cli> {
         Some(c) if server.is_some() || name.is_some() => {
             bail!("--server/--name only apply to pair, not {c}")
         }
-        Some("run") => Command::Run,
+        Some("run") => Command::Run(media),
+        Some("capture-check") => Command::CaptureCheck(media),
+        Some(c) if media_flags => {
+            bail!("media options only apply to run and capture-check, not {c}")
+        }
         Some("status") => Command::Status,
         Some("unpair") => Command::Unpair,
         Some(_) => unreachable!(),
@@ -204,14 +262,10 @@ fn load_paired(dir: &std::path::Path) -> Result<(AgentConfig, DeviceKey)> {
     Ok((cfg, DeviceKey::from_seed(&seed)))
 }
 
-async fn run(dir: PathBuf) -> Result<()> {
+async fn run(dir: PathBuf, media: media::MediaOptions) -> Result<()> {
     let (cfg, key) = load_paired(&dir)?;
     tracing::info!(server = %cfg.server_url, device_id = %cfg.device_id, version = VERSION, "starting");
-    let agent = connection::Agent {
-        api: Api::new(&cfg.server_url)?,
-        key,
-        device_id: cfg.device_id,
-    };
+    let agent = connection::Agent::new(Api::new(&cfg.server_url)?, key, cfg.device_id, media);
     tokio::select! {
         res = agent.run() => res,
         _ = tokio::signal::ctrl_c() => {
@@ -219,6 +273,35 @@ async fn run(dir: PathBuf) -> Result<()> {
             Ok(())
         }
     }
+}
+
+/// Opens the capture source and measures a few seconds of frames (permission diagnostics).
+async fn capture_check(media: &media::MediaOptions) -> Result<()> {
+    let opts = media.clone();
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        let mut cap = media::open_source(&opts).map_err(|e| {
+            if e.chain().any(|c| c.is::<carson_capture::PermissionDenied>()) {
+                e.context("grant Screen Recording to the app running carson-agent (e.g. Terminal), then restart it")
+            } else {
+                e
+            }
+        })?;
+        println!("capture started; measuring for 3 s (move a window to generate frames)…");
+        let start = Instant::now();
+        let (mut n, mut size) = (0u32, (0, 0));
+        while start.elapsed() < Duration::from_secs(3) {
+            if let Some(f) = cap.next_frame(Duration::from_millis(500)) {
+                n += 1;
+                size = (f.width, f.height);
+            }
+        }
+        if n == 0 {
+            bail!("no frames received; the screen may be static or capture is blocked");
+        }
+        println!("ok: {n} frames at {}x{} ({:.1} fps)", size.0, size.1, f64::from(n) / start.elapsed().as_secs_f64());
+        Ok(())
+    })
+    .await?
 }
 
 fn status(dir: PathBuf) -> Result<()> {
@@ -284,7 +367,8 @@ async fn main() -> ExitCode {
             Ok(())
         }
         Command::Pair { server, name } => pair(dir, &server, name).await,
-        Command::Run => run(dir).await,
+        Command::Run(media) => run(dir, media).await,
+        Command::CaptureCheck(media) => capture_check(&media).await,
         Command::Status => status(dir),
         Command::Unpair => unpair(dir),
     };
@@ -307,21 +391,34 @@ mod tests {
 
     #[test]
     fn parses_commands() {
-        assert_eq!(
-            parse(&["pair", "--server", "https://c.example", "--name", "Mac"])
-                .unwrap()
-                .command,
-            Command::Pair {
-                server: "https://c.example".into(),
-                name: Some("Mac".into())
-            }
-        );
+        assert!(matches!(
+            parse(&["pair", "--server", "https://c.example", "--name", "Mac"]).unwrap().command,
+            Command::Pair { server, name: Some(name) } if server == "https://c.example" && name == "Mac"
+        ));
         let cli = parse(&["--config-dir", "/tmp/x", "--log-format", "json", "run"]).unwrap();
-        assert_eq!(cli.command, Command::Run);
+        assert!(matches!(cli.command, Command::Run(_)));
         assert_eq!(cli.config_dir, Some(PathBuf::from("/tmp/x")));
         assert!(cli.json_logs);
-        assert_eq!(parse(&[]).unwrap().command, Command::Help);
-        assert_eq!(parse(&["-V"]).unwrap().command, Command::Version);
+        assert!(matches!(parse(&[]).unwrap().command, Command::Help));
+        assert!(matches!(parse(&["-V"]).unwrap().command, Command::Version));
+        let Command::Run(m) = parse(&[
+            "run",
+            "--fps",
+            "60",
+            "--bitrate-kbps",
+            "8000",
+            "--test-pattern",
+        ])
+        .unwrap()
+        .command
+        else {
+            panic!("expected run");
+        };
+        assert_eq!(
+            (m.capture.fps, m.encoder.fps, m.encoder.bitrate_bps),
+            (60, 60, 8_000_000)
+        );
+        assert_eq!(m.source, media::Source::TestPattern);
     }
 
     #[test]
@@ -335,6 +432,12 @@ mod tests {
         assert!(parse(&["--log-format", "xml", "run"]).is_err());
         assert!(parse(&["--name"]).is_err(), "flag without value");
         assert!(parse(&["frobnicate"]).is_err());
+        assert!(parse(&["run", "--fps", "0"]).is_err(), "fps out of range");
+        assert!(parse(&["run", "--fps", "fast"]).is_err());
+        assert!(
+            parse(&["status", "--test-pattern"]).is_err(),
+            "media flag on wrong command"
+        );
     }
 
     #[test]

@@ -114,6 +114,43 @@ pub struct AgentHelloOk {
     pub heartbeat_interval_s: u64,
 }
 
+/// One ICE server, as in the browser's `RTCIceServer`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct IceServer {
+    pub urls: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub username: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub credential: String,
+}
+
+/// Body of `turn.creds`: ICE servers for one session.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TurnCreds {
+    pub ice_servers: Vec<IceServer>,
+}
+
+/// Who is asking to connect (body of `session.request` sent to the agent).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ViewerInfo {
+    pub email: String,
+    pub ip: String,
+    pub user_agent: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AgentSessionRequest {
+    pub viewer: ViewerInfo,
+}
+
+/// Body of `session.reject` and `session.end`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionReason {
+    pub reason: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub message: String,
+}
+
 /// The exact bytes an agent signs with its device key to obtain an access token.
 /// Must match `AuthMessage` in the Go server (checked against `proto/device-auth.json`).
 pub fn device_auth_message(device_id: &str, nonce: &str) -> Vec<u8> {
