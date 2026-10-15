@@ -1,0 +1,14 @@
+{
+  "description": "Binary input messages on the ptr/ctl data channels (docs/carson-design.md §8). Little-endian. Each vector: message (as JSON) and its exact encoding (hex). Pointer coordinates are normalized 0..65535 over the display currently being streamed (no display byte: the agent tracks it). Wheel deltas are pixels, DOM sign convention (positive dy = scroll down). Key mods bits: 1 shift, 2 ctrl, 4 alt, 8 meta, 16 caps lock. Clipboard text is UTF-8, sent in chunks; flags bit 0 marks the final chunk.",
+  "vectors": [
+    { "name": "pointer_move", "hex": "0100800100", "message": { "type": "pointer_move", "x": 32768, "y": 1 } },
+    { "name": "pointer_move_max", "hex": "01ffffffff", "message": { "type": "pointer_move", "x": 65535, "y": 65535 } },
+    { "name": "button_right_down", "hex": "020201", "message": { "type": "button", "button": 2, "down": true } },
+    { "name": "button_left_up", "hex": "020000", "message": { "type": "button", "button": 0, "down": false } },
+    { "name": "wheel_up_120", "hex": "03000088ff", "message": { "type": "wheel", "dx": 0, "dy": -120 } },
+    { "name": "key_shift_meta_a_down", "hex": "04010900044b657941", "message": { "type": "key", "down": true, "mods": 9, "code": "KeyA" } },
+    { "name": "key_enter_up", "hex": "0400000005456e746572", "message": { "type": "key", "down": false, "mods": 0, "code": "Enter" } },
+    { "name": "clipboard_final_chunk", "hex": "050168c3a9", "message": { "type": "clipboard_chunk", "last": true, "data": "hé" } },
+    { "name": "release_all", "hex": "06", "message": { "type": "release_all" } }
+  ]
+}

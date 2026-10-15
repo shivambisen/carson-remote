@@ -4,6 +4,8 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod input;
+
 /// Signaling envelope version (`"v"` field). Bump on breaking changes.
 pub const PROTOCOL_VERSION: u32 = 1;
 
