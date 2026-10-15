@@ -34,6 +34,14 @@ cargo run -p carson-agent -- run
 
 Open http://localhost:8080, sign in with any email, go to **Pair a device**, and enter the code
 the agent printed. The device appears under **My devices** and turns green while `run` is active.
+Click **View** to watch its screen (view-only until M4). **Stats** (or Ctrl+Alt+Shift+D) shows
+fps, bitrate, RTT, jitter buffer, decode time, and whether the path is direct or relayed.
+
+**macOS permission:** the first time, grant Screen Recording to the app that runs the agent
+(System Settings → Privacy & Security → Screen Recording, e.g. Terminal), then restart it.
+`carson-agent capture-check` verifies capture works. `carson-agent run --test-pattern` streams a
+synthetic pattern instead (no permission needed). Other flags: `--fps`, `--max-width`,
+`--bitrate-kbps`, `--display`.
 
 For live-reloading viewer work, run the server with `CARSON_PUBLIC_URL=http://localhost:5173`
 and `cd viewer && npm run dev`; Vite proxies `/v1`, `/auth` and the WebSocket to `:8080`.
@@ -55,4 +63,4 @@ scripts/e2e-pairing.sh   # real server + real agent: pair, online, offline
 
 ## Status
 
-Milestones 1–2 are done: scaffold/CI, sign-in, device pairing, and live presence ("My devices"). Next: M3, view-only screen share. See the milestone table in the design doc.
+Milestones 1–3 are done: scaffold/CI, sign-in, device pairing, live presence, and view-only screen share over WebRTC (macOS host). Next: M4, remote input and Windows capture. See the milestone table in the design doc.

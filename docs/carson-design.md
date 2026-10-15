@@ -250,6 +250,14 @@ Viewer: `vite`, `typescript`, `vitest`. Nothing else at runtime.
 - Presence: the server pings agents every 15 s, and a missed pong within 30 s marks them offline. The agent also pings and reconnects with 0.5→10 s jittered backoff. A second agent with the same identity replaces the first (close 4000), and the replaced agent exits instead of fighting.
 - Viewers get a `hello.ok` snapshot on every (re)connect, then `presence` deltas, so nothing is lost across reconnects.
 
+**M3:**
+- Session flow: viewer `session.request` (id-correlated) → server checks ownership in the DB and that the device is online/free → `turn.creds` to both (STUN only for now; TURN in M5) → `session.request` to the agent with viewer email/IP/UA → agent opens the capture source (fails fast with `permission_denied`) → `session.accept` → agent `sdp.offer` (dropped by the server if sent before accept) → trickle ICE → media. Only the two parties of a session can relay its messages, and either side disconnecting sends `session.end` to the other.
+- Agent stack: `screencapturekit` 11 (BGRA, newest frame wins) → OpenH264 software encoder (Constrained Baseline, screen-content mode, frame skipping for rate control, IDR on PLI/FIR, safety IDR every 4 s, re-send of the last frame after 1 s idle) → webrtc-rs 0.21 `TrackLocalStaticSample`. One session at a time per device.
+- Keyframe requests: webrtc-rs only delivers inbound RTCP to the app when an interceptor marks it, so `keyframe.rs` adds one, adapted from webrtc-rs's example.
+- Measured on one MacBook (agent and Chrome viewer on the same machine, host candidates): 1280×720 test pattern at 30 fps, about 0.6 Mbps, 6 ms jitter buffer, 4 ms decode. Real 1440×900 screen at 29 fps. Glass-to-glass latency is not measured yet (M7).
+- Build notes: agent dev builds optimize dependencies and the media crates (unoptimized OpenH264 managed only ~9 fps). `MACOSX_DEPLOYMENT_TARGET=14.0` is pinned, and `carson-capture/build.rs` finds the Swift back-compat libraries under both Command Line Tools and full Xcode.
+- **Open issues:** no consent prompt or "being viewed" banner yet; the agent only logs the viewer (M6). Browser mDNS (`.local`) candidates are not resolved, but LAN works via peer-reflexive candidates. The OpenH264 source build must become Cisco's binary via `libloading` before distribution (M8).
+
 ## 18. Future work (not in M1–M8)
 
 LAN-only serverless mode (mDNS), file transfer, audio, multi-viewer, a desktop viewer app, mobile viewer,
