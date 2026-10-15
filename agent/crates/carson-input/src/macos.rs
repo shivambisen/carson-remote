@@ -8,7 +8,8 @@ use core_foundation::boolean::CFBoolean;
 use core_foundation::dictionary::{CFDictionary, CFDictionaryRef};
 use core_foundation::string::CFString;
 use core_graphics::event::{
-    CGEvent, CGEventFlags, CGEventTapLocation, CGEventType, CGMouseButton, EventField, ScrollEventUnit,
+    CGEvent, CGEventFlags, CGEventTapLocation, CGEventType, CGMouseButton, EventField,
+    ScrollEventUnit,
 };
 use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 use core_graphics::geometry::CGPoint;
@@ -24,7 +25,8 @@ unsafe extern "C" {
 /// "allow accessibility" dialog the first time.
 pub fn accessibility_trusted(prompt: bool) -> bool {
     let key = CFString::from_static_string("AXTrustedCheckOptionPrompt");
-    let options = CFDictionary::from_CFType_pairs(&[(key.as_CFType(), CFBoolean::from(prompt).as_CFType())]);
+    let options =
+        CFDictionary::from_CFType_pairs(&[(key.as_CFType(), CFBoolean::from(prompt).as_CFType())]);
     // SAFETY: `options` is a valid CFDictionary that outlives the call.
     unsafe { AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef()) }
 }
@@ -44,7 +46,10 @@ impl MacBackend {
         }
         let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
             .map_err(|()| anyhow!("create CGEventSource"))?;
-        Ok(Self { source, flags: CGEventFlags::CGEventFlagNull })
+        Ok(Self {
+            source,
+            flags: CGEventFlags::CGEventFlagNull,
+        })
     }
 
     fn post(&self, event: CGEvent) {
@@ -103,8 +108,9 @@ impl Backend for MacBackend {
 
     fn scroll(&mut self, dx: i32, dy: i32) -> Result<()> {
         // Quartz: positive wheel values scroll up/left; DOM: positive deltas scroll down/right.
-        let ev = CGEvent::new_scroll_event(self.source.clone(), ScrollEventUnit::PIXEL, 2, -dy, -dx, 0)
-            .map_err(|()| anyhow!("create scroll"))?;
+        let ev =
+            CGEvent::new_scroll_event(self.source.clone(), ScrollEventUnit::PIXEL, 2, -dy, -dx, 0)
+                .map_err(|()| anyhow!("create scroll"))?;
         self.post(ev);
         Ok(())
     }

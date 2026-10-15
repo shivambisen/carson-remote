@@ -4,13 +4,16 @@
 #![allow(unsafe_code)] // Win32 FFI; each call passes fully initialized, stack-owned structs.
 
 use anyhow::{Result, bail};
-use windows::Win32::UI::HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext};
+use windows::Win32::UI::HiDpi::{
+    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_EXTENDEDKEY,
-    KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, MOUSE_EVENT_FLAGS, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_HWHEEL,
-    MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP,
-    MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK,
-    MOUSEEVENTF_WHEEL, MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, MOUSEINPUT, SendInput, VIRTUAL_KEY,
+    INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBD_EVENT_FLAGS, KEYBDINPUT,
+    KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, MOUSE_EVENT_FLAGS,
+    MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_HWHEEL, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
+    MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN,
+    MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL, MOUSEEVENTF_XDOWN,
+    MOUSEEVENTF_XUP, MOUSEINPUT, SendInput, VIRTUAL_KEY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
@@ -38,14 +41,19 @@ pub fn enable_dpi_awareness() {
 impl WindowsBackend {
     pub fn new() -> Result<Self> {
         enable_dpi_awareness();
-        Ok(Self { wheel_rem: (0.0, 0.0) })
+        Ok(Self {
+            wheel_rem: (0.0, 0.0),
+        })
     }
 
     fn send(inputs: &[INPUT]) -> Result<()> {
         // SAFETY: `inputs` is a valid slice of initialized INPUT structs.
         let sent = unsafe { SendInput(inputs, std::mem::size_of::<INPUT>() as i32) };
         if sent as usize != inputs.len() {
-            bail!("SendInput injected {sent}/{} events (blocked by UIPI or the secure desktop?)", inputs.len());
+            bail!(
+                "SendInput injected {sent}/{} events (blocked by UIPI or the secure desktop?)",
+                inputs.len()
+            );
         }
         Ok(())
     }
@@ -53,7 +61,16 @@ impl WindowsBackend {
     fn mouse(dx: i32, dy: i32, data: u32, flags: MOUSE_EVENT_FLAGS) -> INPUT {
         INPUT {
             r#type: INPUT_MOUSE,
-            Anonymous: INPUT_0 { mi: MOUSEINPUT { dx, dy, mouseData: data, dwFlags: flags, time: 0, dwExtraInfo: 0 } },
+            Anonymous: INPUT_0 {
+                mi: MOUSEINPUT {
+                    dx,
+                    dy,
+                    mouseData: data,
+                    dwFlags: flags,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
         }
     }
 }
@@ -77,7 +94,12 @@ fn to_absolute(x: f64, y: f64) -> (i32, i32) {
 impl Backend for WindowsBackend {
     fn move_to(&mut self, x: f64, y: f64, _held: u8) -> Result<()> {
         let (ax, ay) = to_absolute(x, y);
-        Self::send(&[Self::mouse(ax, ay, 0, MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK)])
+        Self::send(&[Self::mouse(
+            ax,
+            ay,
+            0,
+            MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
+        )])
     }
 
     fn button(&mut self, button: u8, down: bool, x: f64, y: f64, _clicks: u32) -> Result<()> {
@@ -96,7 +118,12 @@ impl Backend for WindowsBackend {
         // Windows detects double clicks itself from timing and position.
         let (ax, ay) = to_absolute(x, y);
         Self::send(&[
-            Self::mouse(ax, ay, 0, MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK),
+            Self::mouse(
+                ax,
+                ay,
+                0,
+                MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
+            ),
             Self::mouse(0, 0, data, flags),
         ])
     }
@@ -115,7 +142,11 @@ impl Backend for WindowsBackend {
         if h != 0.0 {
             inputs.push(Self::mouse(0, 0, h as i32 as u32, MOUSEEVENTF_HWHEEL));
         }
-        if inputs.is_empty() { Ok(()) } else { Self::send(&inputs) }
+        if inputs.is_empty() {
+            Ok(())
+        } else {
+            Self::send(&inputs)
+        }
     }
 
     fn key(&mut self, code: &str, down: bool) -> Result<bool> {
@@ -132,7 +163,13 @@ impl Backend for WindowsBackend {
         let input = INPUT {
             r#type: INPUT_KEYBOARD,
             Anonymous: INPUT_0 {
-                ki: KEYBDINPUT { wVk: VIRTUAL_KEY(0), wScan: scan, dwFlags: KEYBD_EVENT_FLAGS(flags.0), time: 0, dwExtraInfo: 0 },
+                ki: KEYBDINPUT {
+                    wVk: VIRTUAL_KEY(0),
+                    wScan: scan,
+                    dwFlags: KEYBD_EVENT_FLAGS(flags.0),
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
             },
         };
         Self::send(&[input])?;

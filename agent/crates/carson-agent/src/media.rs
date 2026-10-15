@@ -17,11 +17,28 @@ pub enum Source {
     TestPattern,
 }
 
+/// How viewer input is applied.
+#[derive(Debug, Clone)]
+pub enum InputMode {
+    /// Inject into the OS (needs Accessibility permission on macOS).
+    Native,
+    /// Log input instead of injecting (testing without touching this machine).
+    Log,
+    /// View only: ignore input.
+    Off,
+    /// Record injected events (tests).
+    #[cfg(test)]
+    Record(std::sync::Arc<std::sync::Mutex<Vec<String>>>),
+}
+
 #[derive(Debug, Clone)]
 pub struct MediaOptions {
     pub source: Source,
     pub capture: CaptureOptions,
     pub encoder: EncoderSettings,
+    pub input: InputMode,
+    /// Sync text clipboard with the viewer.
+    pub clipboard: bool,
 }
 
 impl Default for MediaOptions {
@@ -30,6 +47,28 @@ impl Default for MediaOptions {
             source: Source::Screen,
             capture: CaptureOptions::default(),
             encoder: EncoderSettings::default(),
+            input: InputMode::Native,
+            clipboard: true,
+        }
+    }
+}
+
+const TEST_PATTERN_SIZE: (usize, usize) = (1280, 720);
+
+/// Displays the viewer can choose from.
+pub fn list_displays(opts: &MediaOptions) -> anyhow::Result<Vec<carson_capture::DisplayInfo>> {
+    match opts.source {
+        Source::Screen => carson_capture::displays(),
+        Source::TestPattern => {
+            let (w, h) = TEST_PATTERN_SIZE;
+            Ok(vec![carson_capture::DisplayInfo {
+                index: 0,
+                name: "Test pattern".into(),
+                width: w as u32,
+                height: h as u32,
+                primary: true,
+                bounds: (0.0, 0.0, w as f64, h as f64),
+            }])
         }
     }
 }
@@ -39,7 +78,10 @@ impl Default for MediaOptions {
 pub fn open_source(opts: &MediaOptions) -> anyhow::Result<Box<dyn Capturer>> {
     match opts.source {
         Source::Screen => carson_capture::screen(&opts.capture),
-        Source::TestPattern => Ok(Box::new(TestPattern::new(1280, 720, opts.capture.fps))),
+        Source::TestPattern => {
+            let (w, h) = TEST_PATTERN_SIZE;
+            Ok(Box::new(TestPattern::new(w, h, opts.capture.fps)))
+        }
     }
 }
 
@@ -54,6 +96,8 @@ pub struct TimedFrame {
 pub struct PipelineControl {
     pub keyframe: Arc<AtomicBool>,
     pub stop: Arc<AtomicBool>,
+    /// Set to a display index to switch the capture source.
+    pub switch_display: Arc<std::sync::Mutex<Option<usize>>>,
 }
 
 /// How long the screen may be static before the last frame is re-sent. Keeps the stream
@@ -64,9 +108,10 @@ const IDLE_REFRESH: Duration = Duration::from_secs(1);
 /// receiver is dropped.
 pub fn spawn_pipeline(
     mut capturer: Box<dyn Capturer>,
-    settings: EncoderSettings,
+    mut opts: MediaOptions,
     ctl: PipelineControl,
 ) -> mpsc::Receiver<TimedFrame> {
+    let settings = opts.encoder;
     let (tx, rx) = mpsc::channel::<TimedFrame>(4);
     std::thread::Builder::new()
         .name("carson-encode".into())
@@ -75,6 +120,21 @@ pub fn spawn_pipeline(
             let mut last: Option<Frame> = None;
             let mut last_sent = Instant::now();
             while !ctl.stop.load(Ordering::Relaxed) {
+                let switch = ctl.switch_display.lock().unwrap_or_else(|e| e.into_inner()).take();
+                if let Some(index) = switch {
+                    let mut next = opts.clone();
+                    next.capture.display_index = index;
+                    match open_source(&next) {
+                        Ok(c) => {
+                            capturer = c; // old capturer dropped (stopped) here
+                            opts = next;
+                            last = None;
+                            encoder.request_keyframe();
+                            tracing::info!(display = index, "switched display");
+                        }
+                        Err(e) => tracing::warn!(display = index, error = %format!("{e:#}"), "display switch failed"),
+                    }
+                }
                 let frame = match capturer.next_frame(Duration::from_millis(200)) {
                     Some(f) => {
                         last = Some(f.clone());
@@ -125,7 +185,7 @@ mod tests {
             ..Default::default()
         };
         let ctl = PipelineControl::default();
-        let mut rx = spawn_pipeline(open_source(&opts).unwrap(), opts.encoder, ctl.clone());
+        let mut rx = spawn_pipeline(open_source(&opts).unwrap(), opts.clone(), ctl.clone());
 
         let first = rx.recv().await.unwrap();
         assert!(first.frame.keyframe, "stream must start with an IDR");

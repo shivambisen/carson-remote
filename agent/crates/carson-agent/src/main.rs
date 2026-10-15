@@ -5,6 +5,7 @@ mod api;
 mod backoff;
 mod config;
 mod connection;
+mod control;
 mod identity;
 mod keyframe;
 mod keystore;
@@ -42,7 +43,9 @@ MEDIA OPTIONS:
     --max-width <PX>       Downscale wider screens to this width (default 1920)
     --bitrate-kbps <N>     Target video bitrate (default 4000)
     --display <N>          Display index, 0 = main (default 0)
-    --test-pattern         Stream a synthetic pattern instead of the screen
+    --test-pattern         Stream a synthetic pattern instead of the screen (implies --input log)
+    --input <MODE>         native (default): control this computer; log: only log input; off: view only
+    --no-clipboard         Do not sync the text clipboard
 
 OPTIONS:
     --config-dir <DIR>     State directory (default: OS config dir/carson, or $CARSON_AGENT_DIR)
@@ -79,6 +82,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Cli> {
     let (mut server, mut name, mut config_dir, mut json_logs) = (None, None, None, false);
     let mut media = media::MediaOptions::default();
     let mut media_flags = false;
+    let mut input_explicit = false;
     fn number<T>(flag: &str, v: String, min: T, max: T) -> Result<T>
     where
         T: std::str::FromStr + PartialOrd + std::fmt::Display,
@@ -140,6 +144,24 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Cli> {
             "--test-pattern" => {
                 media_flags = true;
                 media.source = media::Source::TestPattern;
+                if !input_explicit {
+                    media.input = media::InputMode::Log;
+                }
+            }
+            "--input" => {
+                media_flags = true;
+                let mode = match value("--input")?.as_str() {
+                    "native" => media::InputMode::Native,
+                    "log" => media::InputMode::Log,
+                    "off" => media::InputMode::Off,
+                    other => bail!("unknown input mode {other:?} (use native, log or off)"),
+                };
+                input_explicit = true;
+                media.input = mode;
+            }
+            "--no-clipboard" => {
+                media_flags = true;
+                media.clipboard = false;
             }
             "pair" | "run" | "capture-check" | "status" | "unpair" if command.is_none() => {
                 command = Some(arg)
@@ -286,6 +308,18 @@ async fn capture_check(media: &media::MediaOptions) -> Result<()> {
                 e
             }
         })?;
+        match media::list_displays(&opts) {
+            Ok(list) => {
+                for d in list {
+                    println!(
+                        "display {}: {} {}x{} at ({}, {}){}",
+                        d.index, d.name, d.width, d.height, d.bounds.0, d.bounds.1,
+                        if d.index == opts.capture.display_index { "  ← capturing" } else { "" }
+                    );
+                }
+            }
+            Err(e) => println!("could not list displays: {e:#}"),
+        }
         println!("capture started; measuring for 3 s (move a window to generate frames)…");
         let start = Instant::now();
         let (mut n, mut size) = (0u32, (0, 0));
@@ -419,6 +453,27 @@ mod tests {
             (60, 60, 8_000_000)
         );
         assert_eq!(m.source, media::Source::TestPattern);
+        assert!(
+            matches!(m.input, media::InputMode::Log),
+            "test pattern never injects by default"
+        );
+        let Command::Run(m) = parse(&[
+            "run",
+            "--input",
+            "native",
+            "--test-pattern",
+            "--no-clipboard",
+        ])
+        .unwrap()
+        .command
+        else {
+            panic!("expected run");
+        };
+        assert!(
+            matches!(m.input, media::InputMode::Native),
+            "explicit --input wins"
+        );
+        assert!(!m.clipboard);
     }
 
     #[test]

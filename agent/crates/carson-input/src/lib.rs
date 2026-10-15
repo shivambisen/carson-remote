@@ -82,7 +82,14 @@ pub struct Injector {
 impl Injector {
     pub fn new(backend: Box<dyn Backend>, display: Rect) -> Self {
         let pos = (display.x + display.w / 2.0, display.y + display.h / 2.0);
-        Self { backend, display, pos, keys: BTreeSet::new(), buttons: 0, last_down: None }
+        Self {
+            backend,
+            display,
+            pos,
+            keys: BTreeSet::new(),
+            buttons: 0,
+            last_down: None,
+        }
     }
 
     /// Switches the target display (e.g. the viewer picked another monitor).
@@ -115,13 +122,18 @@ impl Injector {
                 if *down == (self.buttons & bit != 0) {
                     return Ok(()); // duplicate press/release: keep state consistent
                 }
-                let clicks = if *down { self.click_count(*button) } else { self.last_down.map_or(1, |l| l.3) };
+                let clicks = if *down {
+                    self.click_count(*button)
+                } else {
+                    self.last_down.map_or(1, |l| l.3)
+                };
                 if *down {
                     self.buttons |= bit;
                 } else {
                     self.buttons &= !bit;
                 }
-                self.backend.button(*button, *down, self.pos.0, self.pos.1, clicks)
+                self.backend
+                    .button(*button, *down, self.pos.0, self.pos.1, clicks)
             }
             InputMessage::Wheel { dx, dy } => self.backend.scroll(i32::from(*dx), i32::from(*dy)),
             InputMessage::Key { down, code, .. } => {
@@ -190,19 +202,31 @@ pub struct RecordingBackend {
 
 impl Backend for RecordingBackend {
     fn move_to(&mut self, x: f64, y: f64, held: u8) -> Result<()> {
-        self.events.lock().unwrap().push(format!("move {x:.0},{y:.0} held={held}"));
+        self.events
+            .lock()
+            .unwrap()
+            .push(format!("move {x:.0},{y:.0} held={held}"));
         Ok(())
     }
     fn button(&mut self, button: u8, down: bool, x: f64, y: f64, clicks: u32) -> Result<()> {
-        self.events.lock().unwrap().push(format!("button {button} {} at {x:.0},{y:.0} x{clicks}", if down { "down" } else { "up" }));
+        self.events.lock().unwrap().push(format!(
+            "button {button} {} at {x:.0},{y:.0} x{clicks}",
+            if down { "down" } else { "up" }
+        ));
         Ok(())
     }
     fn scroll(&mut self, dx: i32, dy: i32) -> Result<()> {
-        self.events.lock().unwrap().push(format!("scroll {dx},{dy}"));
+        self.events
+            .lock()
+            .unwrap()
+            .push(format!("scroll {dx},{dy}"));
         Ok(())
     }
     fn key(&mut self, code: &str, down: bool) -> Result<bool> {
-        self.events.lock().unwrap().push(format!("key {code} {}", if down { "down" } else { "up" }));
+        self.events
+            .lock()
+            .unwrap()
+            .push(format!("key {code} {}", if down { "down" } else { "up" }));
         Ok(keymap::mac_keycode(code).is_some())
     }
 }
@@ -217,7 +241,12 @@ mod tests {
         (Injector::new(Box::new(rec), display), events)
     }
 
-    const SECOND_MONITOR: Rect = Rect { x: 1440.0, y: -200.0, w: 1920.0, h: 1080.0 };
+    const SECOND_MONITOR: Rect = Rect {
+        x: 1440.0,
+        y: -200.0,
+        w: 1920.0,
+        h: 1080.0,
+    };
 
     #[test]
     fn maps_normalized_coordinates_onto_the_display() {
@@ -231,10 +260,15 @@ mod tests {
     #[test]
     fn drag_reports_held_buttons_and_clicks_are_counted() {
         let (mut inj, ev) = injector(SECOND_MONITOR);
-        let press = |inj: &mut Injector, down| inj.handle(&InputMessage::Button { button: 0, down }).unwrap();
-        inj.handle(&InputMessage::PointerMove { x: 0, y: 0 }).unwrap();
+        let press = |inj: &mut Injector, down| {
+            inj.handle(&InputMessage::Button { button: 0, down })
+                .unwrap()
+        };
+        inj.handle(&InputMessage::PointerMove { x: 0, y: 0 })
+            .unwrap();
         press(&mut inj, true);
-        inj.handle(&InputMessage::PointerMove { x: 100, y: 0 }).unwrap();
+        inj.handle(&InputMessage::PointerMove { x: 100, y: 0 })
+            .unwrap();
         press(&mut inj, false);
         // Double click at the same spot.
         press(&mut inj, true);
@@ -242,23 +276,45 @@ mod tests {
         press(&mut inj, true);
         press(&mut inj, false);
         let ev = ev.lock().unwrap();
-        assert_eq!(ev[2], "move 1443,-200 held=1", "move while pressed is a drag");
+        assert_eq!(
+            ev[2], "move 1443,-200 held=1",
+            "move while pressed is a drag"
+        );
         assert_eq!(ev[3], "button 0 up at 1443,-200 x1");
         assert_eq!(ev[4], "button 0 down at 1443,-200 x2");
-        assert_eq!(ev[6], "button 0 down at 1443,-200 x3", "third click is a triple click");
+        assert_eq!(
+            ev[6], "button 0 down at 1443,-200 x3",
+            "third click is a triple click"
+        );
     }
 
     #[test]
     fn release_all_frees_everything_once() {
         let (mut inj, ev) = injector(SECOND_MONITOR);
         for code in ["ShiftLeft", "KeyA"] {
-            inj.handle(&InputMessage::Key { down: true, mods: 0, code: code.into() }).unwrap();
+            inj.handle(&InputMessage::Key {
+                down: true,
+                mods: 0,
+                code: code.into(),
+            })
+            .unwrap();
         }
-        inj.handle(&InputMessage::Button { button: 2, down: true }).unwrap();
+        inj.handle(&InputMessage::Button {
+            button: 2,
+            down: true,
+        })
+        .unwrap();
         inj.handle(&InputMessage::ReleaseAll).unwrap();
         assert!(inj.held_keys().is_empty());
         let tail: Vec<_> = ev.lock().unwrap()[3..].to_vec();
-        assert_eq!(tail, ["key KeyA up", "key ShiftLeft up", "button 2 up at 2400,340 x1"]);
+        assert_eq!(
+            tail,
+            [
+                "key KeyA up",
+                "key ShiftLeft up",
+                "button 2 up at 2400,340 x1"
+            ]
+        );
         inj.handle(&InputMessage::ReleaseAll).unwrap();
         assert_eq!(ev.lock().unwrap().len(), 6, "second release_all is a no-op");
     }
@@ -266,7 +322,12 @@ mod tests {
     #[test]
     fn dropping_the_injector_releases_held_keys() {
         let (mut inj, ev) = injector(SECOND_MONITOR);
-        inj.handle(&InputMessage::Key { down: true, mods: 8, code: "MetaLeft".into() }).unwrap();
+        inj.handle(&InputMessage::Key {
+            down: true,
+            mods: 8,
+            code: "MetaLeft".into(),
+        })
+        .unwrap();
         drop(inj);
         assert_eq!(ev.lock().unwrap().last().unwrap(), "key MetaLeft up");
     }
@@ -274,17 +335,40 @@ mod tests {
     #[test]
     fn ignores_spurious_releases_and_bad_buttons() {
         let (mut inj, ev) = injector(SECOND_MONITOR);
-        inj.handle(&InputMessage::Key { down: false, mods: 0, code: "KeyQ".into() }).unwrap();
-        inj.handle(&InputMessage::Button { button: 0, down: false }).unwrap();
-        inj.handle(&InputMessage::Button { button: 9, down: true }).unwrap();
+        inj.handle(&InputMessage::Key {
+            down: false,
+            mods: 0,
+            code: "KeyQ".into(),
+        })
+        .unwrap();
+        inj.handle(&InputMessage::Button {
+            button: 0,
+            down: false,
+        })
+        .unwrap();
+        inj.handle(&InputMessage::Button {
+            button: 9,
+            down: true,
+        })
+        .unwrap();
         assert!(ev.lock().unwrap().is_empty());
     }
 
     #[test]
     fn switching_display_releases_input() {
         let (mut inj, ev) = injector(SECOND_MONITOR);
-        inj.handle(&InputMessage::Key { down: true, mods: 0, code: "KeyW".into() }).unwrap();
-        inj.set_display(Rect { x: 0.0, y: 0.0, w: 1440.0, h: 900.0 });
+        inj.handle(&InputMessage::Key {
+            down: true,
+            mods: 0,
+            code: "KeyW".into(),
+        })
+        .unwrap();
+        inj.set_display(Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 1440.0,
+            h: 900.0,
+        });
         assert_eq!(ev.lock().unwrap().last().unwrap(), "key KeyW up");
         assert_eq!(inj.map(0, 0), (0.0, 0.0));
     }

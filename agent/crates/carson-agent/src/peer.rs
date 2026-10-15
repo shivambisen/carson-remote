@@ -27,7 +27,9 @@ use webrtc::peer_connection::{
     RTCPeerConnectionState, RTCSessionDescription, Registry, register_default_interceptors,
 };
 
+use carson_proto::input::{CONTROL_CHANNEL, POINTER_CHANNEL};
 use carson_proto::{Envelope, MessageType};
+use webrtc::data_channel::RTCDataChannelInit;
 
 use crate::keyframe::{KeyframeRequestForwarder, is_keyframe_request};
 use crate::media::{MediaOptions, PipelineControl, spawn_pipeline};
@@ -216,11 +218,30 @@ async fn session_inner(
         .add_track(Arc::clone(&track) as Arc<dyn TrackLocal>)
         .await?;
 
+    // Created by the offerer so they are negotiated in the first offer.
+    let ptr = pc
+        .create_data_channel(
+            POINTER_CHANNEL,
+            Some(RTCDataChannelInit {
+                ordered: false,
+                max_retransmits: Some(0),
+                ..Default::default()
+            }),
+        )
+        .await?;
+    let ctl_channel = pc.create_data_channel(CONTROL_CHANNEL, None).await?;
+    let ctl = PipelineControl::default();
+    let control_task = tokio::spawn(crate::control::run(
+        ptr,
+        ctl_channel,
+        media.clone(),
+        ctl.clone(),
+    ));
+
     let offer = pc.create_offer(None).await?;
     pc.set_local_description(offer.clone()).await?;
     send(out, MessageType::SdpOffer, sid, &offer);
 
-    let ctl = PipelineControl::default();
     let mut capturer = Some(capturer);
     let mut streaming: Option<tokio::task::JoinHandle<()>> = None;
     let deadline = tokio::time::sleep(CONNECT_TIMEOUT);
@@ -253,7 +274,7 @@ async fn session_inner(
                         .first()
                         .map(|c| c.payload_type)
                         .context("no negotiated codec")?;
-                    let frames = spawn_pipeline(cap, media.encoder, ctl.clone());
+                    let frames = spawn_pipeline(cap, media.clone(), ctl.clone());
                     streaming = Some(tokio::spawn(stream_frames(
                         Arc::clone(&track),
                         ssrc,
@@ -272,6 +293,7 @@ async fn session_inner(
     if let Some(task) = streaming {
         task.abort();
     }
+    control_task.abort(); // drops the injector → releases held keys/buttons
     let _ = pc.close().await;
     Ok(reason)
 }
@@ -354,6 +376,7 @@ mod tests {
         candidates: mpsc::UnboundedSender<RTCIceCandidateInit>,
         frames: Arc<AtomicUsize>,
         packets: Arc<AtomicUsize>,
+        channels: mpsc::UnboundedSender<Arc<dyn webrtc::data_channel::DataChannel>>,
     }
 
     #[async_trait::async_trait]
@@ -362,6 +385,10 @@ mod tests {
             if let Ok(c) = event.candidate.to_json() {
                 let _ = self.candidates.send(c);
             }
+        }
+
+        async fn on_data_channel(&self, dc: Arc<dyn webrtc::data_channel::DataChannel>) {
+            let _ = self.channels.send(dc);
         }
 
         async fn on_track(&self, track: Arc<dyn TrackRemote>) {
@@ -383,8 +410,10 @@ mod tests {
     async fn streams_h264_to_a_webrtc_peer_over_real_ice() {
         let (out_tx, mut out_rx) = mpsc::unbounded_channel::<Envelope>();
         let (ev_tx, ev_rx) = mpsc::unbounded_channel();
+        let recorded = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let media = MediaOptions {
             source: Source::TestPattern,
+            input: crate::media::InputMode::Record(Arc::clone(&recorded)),
             ..Default::default()
         };
         let capturer = crate::media::open_source(&media).unwrap();
@@ -399,6 +428,7 @@ mod tests {
         ));
 
         let (cand_tx, mut cand_rx) = mpsc::unbounded_channel();
+        let (dc_tx, mut dc_rx) = mpsc::unbounded_channel();
         let frames = Arc::new(AtomicUsize::new(0));
         let packets = Arc::new(AtomicUsize::new(0));
         let viewer = build_peer(
@@ -407,6 +437,7 @@ mod tests {
                 candidates: cand_tx,
                 frames: Arc::clone(&frames),
                 packets: Arc::clone(&packets),
+                channels: dc_tx,
             }),
         )
         .await
@@ -442,6 +473,78 @@ mod tests {
             }
         }
 
+        // Remote control: both channels arrive; ctl announces displays and input status.
+        use carson_proto::input::{ControlMessage, InputMessage};
+        use webrtc::data_channel::DataChannelEvent;
+        let mut channels = std::collections::HashMap::new();
+        while channels.len() < 2 {
+            let dc = tokio::time::timeout(Duration::from_secs(5), dc_rx.recv())
+                .await
+                .expect("data channels")
+                .unwrap();
+            channels.insert(dc.label().await.unwrap(), dc);
+        }
+        let (ptr, ctl) = (&channels["ptr"], &channels["ctl"]);
+        assert!(!ptr.ordered().await.unwrap(), "ptr must be unordered");
+        // webrtc-rs reports max_retransmits=None for remotely opened channels regardless of the
+        // DCEP reliability parameter; the browser check (RTCDataChannel.maxRetransmits) covers it.
+        assert!(
+            ctl.ordered().await.unwrap(),
+            "ctl must be reliable and ordered"
+        );
+
+        let mut control = Vec::new();
+        while control.len() < 2 {
+            let ev = tokio::time::timeout(Duration::from_secs(5), ctl.poll())
+                .await
+                .expect("control message")
+                .unwrap();
+            if let DataChannelEvent::OnMessage(m) = ev {
+                assert!(m.is_string);
+                control.push(serde_json::from_slice::<ControlMessage>(&m.data).unwrap());
+            }
+        }
+        assert!(
+            matches!(&control[0], ControlMessage::Displays { displays, current: 0 } if displays.len() == 1 && displays[0].width == 1280)
+        );
+        assert_eq!(
+            control[1],
+            ControlMessage::InputStatus {
+                available: true,
+                message: String::new()
+            }
+        );
+
+        let send = |dc: &Arc<dyn webrtc::data_channel::DataChannel>, m: InputMessage| {
+            let dc = Arc::clone(dc);
+            async move {
+                dc.send(bytes::BytesMut::from(&m.encode()[..]))
+                    .await
+                    .unwrap()
+            }
+        };
+        send(ptr, InputMessage::PointerMove { x: 65535, y: 0 }).await;
+        send(
+            ctl,
+            InputMessage::Key {
+                down: true,
+                mods: 0,
+                code: "KeyA".into(),
+            },
+        )
+        .await;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let ev = recorded.lock().unwrap().clone();
+            if ev.iter().any(|e| e == "key KeyA down")
+                && ev.iter().any(|e| e == "move 1279,0 held=0")
+            {
+                break;
+            }
+            assert!(Instant::now() < deadline, "input not injected: {ev:?}");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
         // A viewer hanging up ends the session cleanly, without a session.end echo.
         ev_tx.send(SessionEvent::RemoteEnd).unwrap();
         tokio::time::timeout(Duration::from_secs(5), session)
@@ -456,5 +559,16 @@ mod tests {
             );
         }
         let _ = viewer.close().await;
+
+        // The held key is released when the session goes away.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !recorded.lock().unwrap().iter().any(|e| e == "key KeyA up") {
+            assert!(
+                Instant::now() < deadline,
+                "held key never released: {:?}",
+                recorded.lock().unwrap()
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
     }
 }
