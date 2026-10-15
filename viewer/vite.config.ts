@@ -6,6 +6,7 @@ export default defineConfig({
     port: 5173,
     proxy: {
       "/v1": { target: "http://localhost:8080", ws: true },
+      "/auth": "http://localhost:8080",
       "/healthz": "http://localhost:8080",
     },
   },
