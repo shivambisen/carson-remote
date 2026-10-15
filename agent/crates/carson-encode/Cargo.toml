@@ -1,0 +1,13 @@
+[package]
+name = "carson-encode"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow = "1"
+openh264 = "0.9.8"
+
+[lints]
+workspace = true
