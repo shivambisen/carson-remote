@@ -1,0 +1,57 @@
+# Local dev stack: carson-server + coturn (STUN/TURN).
+#   cp .env.example .env && docker compose -f deploy/docker-compose.yml --env-file .env up --build
+# Production adds Caddy for TLS:  ... --profile prod up -d   (set CARSON_DOMAIN and a real CARSON_TURN_SECRET)
+name: carson
+
+services:
+  carson-server:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    environment:
+      CARSON_ADDR: ":8080"
+      CARSON_PUBLIC_URL: ${CARSON_PUBLIC_URL:-http://localhost:8080}
+      CARSON_DB_PATH: /data/carson.db
+      CARSON_LOG_LEVEL: ${CARSON_LOG_LEVEL:-info}
+      CARSON_DEV: ${CARSON_DEV:-true}
+      CARSON_TURN_SECRET: ${CARSON_TURN_SECRET:?set CARSON_TURN_SECRET in .env}
+      CARSON_TURN_URLS: ${CARSON_TURN_URLS:-}
+      CARSON_STUN_URLS: ${CARSON_STUN_URLS:-}
+    ports:
+      - "8080:8080"
+    volumes:
+      - carson-data:/data
+    restart: unless-stopped
+
+  coturn:
+    image: coturn/coturn:4.7.0
+    # Secret is passed as a flag so it never lives in a committed config file.
+    command:
+      - -c
+      - /etc/coturn/turnserver.conf
+      - --static-auth-secret=${CARSON_TURN_SECRET:?set CARSON_TURN_SECRET in .env}
+    volumes:
+      - ./coturn/turnserver.conf:/etc/coturn/turnserver.conf:ro
+    ports:
+      - "3478:3478/udp"
+      - "3478:3478/tcp"
+      - "49160-49200:49160-49200/udp"
+    restart: unless-stopped
+
+  caddy:
+    profiles: ["prod"]
+    image: caddy:2.10-alpine
+    environment:
+      CARSON_DOMAIN: ${CARSON_DOMAIN:-}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    depends_on: [carson-server]
+    restart: unless-stopped
+
+volumes:
+  carson-data:
+  caddy-data:

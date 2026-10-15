@@ -1,0 +1,6 @@
+# Automatic HTTPS via Let's Encrypt. Requires CARSON_DOMAIN to resolve to this host.
+{$CARSON_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy carson-server:8080
+	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+}

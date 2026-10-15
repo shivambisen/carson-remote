@@ -1,0 +1,79 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  server:
+    name: carson-server (Go)
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: server } }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.mod
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+      - run: go vet ./...
+      - run: go test -race ./...
+      - run: go build ./cmd/carson-server
+
+  agent:
+    name: carson-agent (Rust, ${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    defaults: { run: { working-directory: agent } }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: agent
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test --all
+
+  viewer:
+    name: carson-viewer (TypeScript)
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: viewer } }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: viewer/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+
+  compose:
+    name: compose stack
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Validate compose file
+        run: CARSON_TURN_SECRET=ci-only docker compose -f deploy/docker-compose.yml config -q
+      - name: Build and smoke-test server image
+        run: |
+          docker build -f server/Dockerfile -t carson-server:ci .
+          docker run -d --name carson -p 8080:8080 -e CARSON_DEV=true carson-server:ci
+          for i in $(seq 1 20); do curl -fsS localhost:8080/healthz && exit 0; sleep 1; done
+          docker logs carson; exit 1
