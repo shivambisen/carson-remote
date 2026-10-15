@@ -1,0 +1,4 @@
+# ScreenCaptureKit's Swift bridge targets macOS 13; carson-agent requires macOS 14+.
+# Linking for an older target pulls in Swift back-deployment libs that no longer ship.
+[env]
+MACOSX_DEPLOYMENT_TARGET = "14.0"
