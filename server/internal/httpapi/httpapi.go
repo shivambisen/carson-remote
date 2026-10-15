@@ -75,6 +75,8 @@ func New(cfg config.Config, st *store.Store, log *slog.Logger) *Server {
 	mux.Handle("GET /v1/ws", &signaling.Handler{
 		Hub: hub, Store: st, Auth: authSvc, Devices: devSvc, Log: log, Now: now,
 		PingInterval: 15 * time.Second, PingTimeout: 30 * time.Second,
+		STUNURLs: cfg.STUNURLs, TrustProxy: cfg.TrustProxy,
+		SessionLimiter: ratelimit.New(10, time.Minute, 5),
 	})
 	if cfg.WebDir != "" {
 		mux.Handle("GET /", http.FileServer(http.Dir(cfg.WebDir)))

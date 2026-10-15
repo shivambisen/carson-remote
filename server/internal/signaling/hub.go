@@ -14,10 +14,11 @@ type client struct {
 	send     chan []byte
 	closeFn  func(reason string)
 	once     sync.Once
+	sessions map[string]*session // guarded by Hub.mu
 }
 
 func newClient(userID, deviceID string, closeFn func(string)) *client {
-	return &client{userID: userID, deviceID: deviceID, send: make(chan []byte, 32), closeFn: closeFn}
+	return &client{userID: userID, deviceID: deviceID, send: make(chan []byte, 64), closeFn: closeFn, sessions: map[string]*session{}}
 }
 
 // enqueue queues msg for writing, or closes the client if it is not keeping up.
@@ -35,13 +36,14 @@ func (c *client) close(reason string) {
 
 // Hub tracks live viewers (per user) and agents (per device).
 type Hub struct {
-	mu      sync.Mutex
-	viewers map[string]map[*client]struct{} // user ID → viewers
-	agents  map[string]*client              // device ID → agent
+	mu       sync.Mutex
+	viewers  map[string]map[*client]struct{} // user ID → viewers
+	agents   map[string]*client              // device ID → agent
+	sessions map[string]*session             // session ID → session
 }
 
 func NewHub() *Hub {
-	return &Hub{viewers: map[string]map[*client]struct{}{}, agents: map[string]*client{}}
+	return &Hub{viewers: map[string]map[*client]struct{}{}, agents: map[string]*client{}, sessions: map[string]*session{}}
 }
 
 // Online reports whether the device has a live agent connection.

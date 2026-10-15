@@ -14,6 +14,7 @@ import (
 	"carson/server/internal/devices"
 	"carson/server/internal/httpx"
 	"carson/server/internal/protocol"
+	"carson/server/internal/ratelimit"
 	"carson/server/internal/store"
 )
 
@@ -36,6 +37,11 @@ type Handler struct {
 	// at most PingInterval + PingTimeout (15 s + 30 s = 45 s by default).
 	PingInterval time.Duration
 	PingTimeout  time.Duration
+	// STUNURLs are handed to both peers for each session.
+	STUNURLs []string
+	// SessionLimiter bounds session.request per user.
+	SessionLimiter *ratelimit.Limiter
+	TrustProxy     bool
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -91,10 +97,16 @@ func (h *Handler) serveViewer(w http.ResponseWriter, r *http.Request) {
 	hello, _ := protocol.NewEnvelope(protocol.TypeHelloOK, map[string]any{"user": u, "devices": views})
 	c.enqueue(hello)
 
+	ua := r.UserAgent()
+	if len(ua) > 200 {
+		ua = ua[:200]
+	}
+	viewer := protocol.ViewerInfo{Email: u.Email, IP: httpx.ClientIP(r, h.TrustProxy), UserAgent: ua}
+	defer h.endAllSessions(c)
+
 	go h.writeLoop(ctx, conn, c)
 	h.readLoop(ctx, conn, c, func(env protocol.Envelope) {
-		// Milestone 3 adds session.request etc. Unknown types are ignored for forward compatibility.
-		h.Log.Debug("viewer message ignored", "type", env.Type, "user_id", u.ID)
+		h.handleViewerSession(c, viewer, env)
 	})
 }
 
@@ -124,6 +136,7 @@ func (h *Handler) serveAgent(w http.ResponseWriter, r *http.Request) {
 	h.touch(d.ID, "", "")
 	h.announce(d.UserID, d.ID, true)
 	log.Info("agent online")
+	defer h.endAllSessions(c)
 	defer func() {
 		if h.Hub.removeAgent(c) {
 			h.touch(d.ID, "", "")
@@ -152,7 +165,7 @@ func (h *Handler) serveAgent(w http.ResponseWriter, r *http.Request) {
 			ok, _ := protocol.NewEnvelope(protocol.TypeHelloOK, protocol.AgentHelloOK{DeviceID: d.ID, HeartbeatInterval: int(h.PingInterval.Seconds())})
 			c.enqueue(ok)
 		default:
-			log.Debug("agent message ignored", "type", env.Type)
+			h.handleAgentSession(c, env)
 		}
 	})
 }

@@ -32,6 +32,11 @@ type env struct {
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
+	return newEnvWithHeartbeat(t, 50*time.Millisecond, 100*time.Millisecond)
+}
+
+func newEnvWithHeartbeat(t *testing.T, interval, timeout time.Duration) *env {
+	t.Helper()
 	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "c.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -48,7 +53,7 @@ func newEnv(t *testing.T) *env {
 	d := &devices.Service{Store: st, Auth: a, Presence: hub, Log: log, Now: time.Now}
 	mux.Handle("GET /v1/ws", &Handler{
 		Hub: hub, Store: st, Auth: a, Devices: d, Log: log, Now: time.Now,
-		PingInterval: 50 * time.Millisecond, PingTimeout: 100 * time.Millisecond,
+		PingInterval: interval, PingTimeout: timeout,
 	})
 	return &env{srv: srv, store: st, hub: hub}
 }
