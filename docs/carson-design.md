@@ -266,7 +266,16 @@ Viewer: `vite`, `typescript`, `vitest`. Nothing else at runtime.
 - Clipboard: text only, change-driven polling (500 ms) with echo suppression. Existing host clipboard contents are never sent at connect.
 - Viewer: Ctrl/⌘+V keydown is held until the `paste` event supplies the text (max 150 ms), so the host pastes the viewer's clipboard. Pointer and wheel events are coalesced per animation frame. Keyboard Lock is used in fullscreen.
 - **Known limits:** no input to the Windows secure desktop (UAC/lock screen), which needs a SYSTEM service. Physical keys mean ⌘↔Win, with no Ctrl↔⌘ remapping yet. The webrtc-rs answerer reports `maxRetransmits=None` for remote channels (Chrome confirms 0 on the wire).
-- **Security gap until M6:** anyone signed in to the account can now *control* an online host without a prompt or visible banner. The agent only logs it.
+- ~~Security gap until M6~~: closed by the M6 consent work below.
+
+**M6 (consent part; done before M5):**
+- Policy per host (`agent.json`): **attended** (default), or **unattended** with an optional PIN. Unattended can only be enabled locally with `carson-agent unattended on [--pin]`. Configs from before M6 default to attended.
+- Attended flow: before accepting, the agent shows "<email> wants to control/view this computer, connecting from <IP>, <browser>" with **Deny as the default button**. Anything but an explicit Allow (Deny, 30 s timeout, prompt unavailable) rejects with `declined` / `consent_timeout` / `consent_unavailable`.
+- PIN flow: the session is accepted and WebRTC connects, but **no video, input or clipboard** flows until the viewer sends `{"type":"pin"}` on `ctl` and the agent verifies it against the Argon2id hash. Failures are counted across sessions: 5 attempts, then a 15-minute lockout (`pin_locked`, enforced again at `session.request`). The viewer has 120 s to enter the PIN (`pin_timeout`).
+- Banner: shown right before the first frame is sent, red, always on top, on all Spaces (macOS) / topmost tool window (Windows). It cannot be closed except with **Disconnect**, which ends the session (`host_disconnected`). If it cannot be shown, the session ends (`banner_unavailable`). The only exception is a synthetic test pattern with non-native input.
+- UI runs in a helper process (`carson-agent ui prompt|banner`, code in `carson-hostui`). It exits if the agent goes away (stdin EOF), and the agent kills it when the session ends. Fail-closed throughout.
+- Verified: PIN gate end to end in a webrtc-rs loopback test (no frames or input before the PIN, wrong-PIN countdown, unlock) and in Chrome (PIN keystrokes are not forwarded). Banner and prompt helpers start and stay up on macOS. Windows UI is compile- and clippy-checked only.
+- Still to do in M6: audit log, revoke device, server-side rate-limit review, DTLS fingerprint signing. Linux has no prompt or banner yet, so attended sessions there are refused.
 
 ## 18. Future work (not in M1–M8)
 

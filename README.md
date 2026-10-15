@@ -44,6 +44,19 @@ Ctrl+Alt+Shift+D) shows fps, bitrate, RTT, jitter buffer, decode time, and direc
 Keys are sent as physical keys, so ⌘ on a Mac viewer is the Windows key on a Windows host (and vice
 versa). Use the host's own shortcuts (e.g. Ctrl+C on Windows).
 
+**Consent:** by default every connection shows an **Allow / Deny** prompt on the host (no
+answer in 30 s = deny). While a session is active, a red always-on-top banner names who is
+connected; its **Disconnect** button ends the session. For unattended access (no one at the
+computer), run this on the host itself; it can never be switched on remotely:
+
+```bash
+carson-agent unattended on --pin   # viewers must enter the PIN (5 tries, then 15 min lockout)
+carson-agent unattended off        # back to Allow/Deny prompts
+```
+
+The PIN is checked on the host, inside the encrypted connection, and stored only as an
+Argon2id hash. The banner still appears in unattended mode.
+
 **macOS permissions:** grant the app that runs the agent (e.g. Terminal) **Screen Recording**
 and **Accessibility** (for control) in System Settings → Privacy & Security, then restart it.
 Without Accessibility the viewer shows "view only".
