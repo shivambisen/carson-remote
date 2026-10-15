@@ -258,6 +258,16 @@ Viewer: `vite`, `typescript`, `vitest`. Nothing else at runtime.
 - Build notes: agent dev builds optimize dependencies and the media crates (unoptimized OpenH264 managed only ~9 fps). `MACOSX_DEPLOYMENT_TARGET=14.0` is pinned, and `carson-capture/build.rs` finds the Swift back-compat libraries under both Command Line Tools and full Xcode.
 - **Open issues:** no consent prompt or "being viewed" banner yet; the agent only logs the viewer (M6). Browser mDNS (`.local`) candidates are not resolved, but LAN works via peer-reflexive candidates. The OpenH264 source build must become Cisco's binary via `libloading` before distribution (M8).
 
+**M4:**
+- Wire format: §8 as planned, minus the display byte on PointerMove (input always targets the streamed display), plus `ClipboardChunk` (16 KiB, UTF-8-safe, 1 MiB cap) and `ReleaseAll`. Pinned by `proto/input-vectors.json`, which both the Rust and TS tests check. JSON control text on `ctl`: `displays`, `select_display`, `input_status`.
+- Clicks travel with their position on the ordered channel (a pointer move goes on `ctl` right before each button event), because unordered `ptr` moves could otherwise arrive after the click.
+- `carson-input`: `Injector` tracks held keys and buttons (release on disconnect, focus loss, display switch and drop), counts double/triple clicks (macOS needs an explicit click state), and reconciles modifiers from each key event's bits (handles Shift held before focus). Backends: CGEvent with pixel scrolling (macOS, needs Accessibility, prompts once) and SendInput with scancodes and a per-monitor-DPI-aware virtual desktop (Windows).
+- Windows capture: Windows Graphics Capture via `windows-capture`, CPU nearest-neighbour downscale (GPU in M7). Windows code is **compile- and clippy-checked against the real Win32 bindings only and has not been run yet**.
+- Clipboard: text only, change-driven polling (500 ms) with echo suppression. Existing host clipboard contents are never sent at connect.
+- Viewer: Ctrl/⌘+V keydown is held until the `paste` event supplies the text (max 150 ms), so the host pastes the viewer's clipboard. Pointer and wheel events are coalesced per animation frame. Keyboard Lock is used in fullscreen.
+- **Known limits:** no input to the Windows secure desktop (UAC/lock screen), which needs a SYSTEM service. Physical keys mean ⌘↔Win, with no Ctrl↔⌘ remapping yet. The webrtc-rs answerer reports `maxRetransmits=None` for remote channels (Chrome confirms 0 on the wire).
+- **Security gap until M6:** anyone signed in to the account can now *control* an online host without a prompt or visible banner. The agent only logs it.
+
 ## 18. Future work (not in M1–M8)
 
 LAN-only serverless mode (mDNS), file transfer, audio, multi-viewer, a desktop viewer app, mobile viewer,
