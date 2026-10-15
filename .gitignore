@@ -1,0 +1,20 @@
+# env / secrets
+.env
+*.pem
+*.key
+
+# Go
+/server/bin/
+/server/data/
+
+# Rust
+/agent/target/
+
+# Node
+node_modules/
+/viewer/dist/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/

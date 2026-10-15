@@ -1,0 +1,6 @@
+**/node_modules
+agent/target
+viewer/dist
+server/data
+.git
+.env
