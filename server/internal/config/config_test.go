@@ -54,12 +54,28 @@ func TestLoadRejectsInsecureProduction(t *testing.T) {
 }
 
 func TestLoadAcceptsValidProduction(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		"CARSON_PUBLIC_URL":           "https://carson.example.com",
+		"CARSON_TURN_SECRET":          strings.Repeat("x", 32),
+		"CARSON_GITHUB_CLIENT_ID":     "id",
+		"CARSON_GITHUB_CLIENT_SECRET": "secret",
+		"CARSON_TRUST_PROXY":          "true",
+	}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.GitHub.Enabled() || cfg.Google.Enabled() || !cfg.TrustProxy {
+		t.Fatalf("unexpected config: %+v", cfg)
+	}
+}
+
+func TestLoadRequiresLoginProviderInProduction(t *testing.T) {
 	_, err := Load(env(map[string]string{
 		"CARSON_PUBLIC_URL":  "https://carson.example.com",
 		"CARSON_TURN_SECRET": strings.Repeat("x", 32),
 	}))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "no login provider") {
+		t.Fatalf("err = %v", err)
 	}
 }
 
@@ -69,6 +85,8 @@ func TestLoadRejectsBadValues(t *testing.T) {
 		"bad level":    {"CARSON_DEV": "true", "CARSON_LOG_LEVEL": "loud"},
 		"relative url": {"CARSON_DEV": "true", "CARSON_PUBLIC_URL": "/carson"},
 		"ftp url":      {"CARSON_DEV": "true", "CARSON_PUBLIC_URL": "ftp://x"},
+		"origin path":  {"CARSON_DEV": "true", "CARSON_ALLOWED_ORIGINS": "http://localhost:5173/app"},
+		"bad proxy":    {"CARSON_DEV": "true", "CARSON_TRUST_PROXY": "sometimes"},
 	}
 	for name, m := range cases {
 		t.Run(name, func(t *testing.T) {

@@ -19,7 +19,27 @@ type Config struct {
 	TURNSecret string
 	TURNURLs   []string
 	STUNURLs   []string
+
+	// AllowedOrigins are browser origins (besides PublicURL) allowed to make
+	// cookie-authenticated requests, e.g. the Vite dev server.
+	AllowedOrigins []string
+	// TrustProxy uses the last X-Forwarded-For hop as the client IP (set behind Caddy).
+	TrustProxy bool
+	// WebDir, if set, is served as the viewer (static files with SPA fallback).
+	WebDir string
+
+	Google OAuthClient
+	GitHub OAuthClient
 }
+
+// OAuthClient holds one identity provider's credentials. Empty ClientID disables it.
+type OAuthClient struct {
+	ClientID     string
+	ClientSecret string
+}
+
+// Enabled reports whether the provider is configured.
+func (c OAuthClient) Enabled() bool { return c.ClientID != "" && c.ClientSecret != "" }
 
 // Load builds a Config from a getenv function (os.Getenv in production, a map in tests).
 func Load(getenv func(string) string) (Config, error) {
@@ -37,14 +57,29 @@ func Load(getenv func(string) string) (Config, error) {
 		TURNSecret: getenv("CARSON_TURN_SECRET"),
 		TURNURLs:   splitList(getenv("CARSON_TURN_URLS")),
 		STUNURLs:   splitList(getenv("CARSON_STUN_URLS")),
+
+		AllowedOrigins: splitList(getenv("CARSON_ALLOWED_ORIGINS")),
+		WebDir:         get("CARSON_WEB_DIR", ""),
+		Google:         OAuthClient{getenv("CARSON_GOOGLE_CLIENT_ID"), getenv("CARSON_GOOGLE_CLIENT_SECRET")},
+		GitHub:         OAuthClient{getenv("CARSON_GITHUB_CLIENT_ID"), getenv("CARSON_GITHUB_CLIENT_SECRET")},
 	}
 
-	switch v := strings.ToLower(get("CARSON_DEV", "false")); v {
-	case "true", "1", "yes":
-		cfg.Dev = true
-	case "false", "0", "no":
-	default:
-		errs = append(errs, fmt.Errorf("CARSON_DEV: invalid boolean %q", v))
+	parseBool := func(key string, dst *bool) {
+		switch v := strings.ToLower(get(key, "false")); v {
+		case "true", "1", "yes":
+			*dst = true
+		case "false", "0", "no":
+		default:
+			errs = append(errs, fmt.Errorf("%s: invalid boolean %q", key, v))
+		}
+	}
+	parseBool("CARSON_DEV", &cfg.Dev)
+	parseBool("CARSON_TRUST_PROXY", &cfg.TrustProxy)
+
+	for _, o := range cfg.AllowedOrigins {
+		if u, err := url.Parse(o); err != nil || u.Host == "" || u.Path != "" || (u.Scheme != "http" && u.Scheme != "https") {
+			errs = append(errs, fmt.Errorf("CARSON_ALLOWED_ORIGINS: %q is not an origin like https://host[:port]", o))
+		}
 	}
 
 	if err := cfg.LogLevel.UnmarshalText([]byte(get("CARSON_LOG_LEVEL", "info"))); err != nil {
@@ -67,6 +102,9 @@ func Load(getenv func(string) string) (Config, error) {
 		}
 		if len(cfg.TURNSecret) < 32 {
 			errs = append(errs, errors.New("CARSON_TURN_SECRET: must be at least 32 characters outside dev mode"))
+		}
+		if !cfg.Google.Enabled() && !cfg.GitHub.Enabled() {
+			errs = append(errs, errors.New("no login provider configured: set CARSON_GOOGLE_* or CARSON_GITHUB_* (dev login is disabled outside dev mode)"))
 		}
 	}
 
