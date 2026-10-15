@@ -1,0 +1,21 @@
+[package]
+name = "carson-input"
+description = "Input injection for carson-agent (mouse, keyboard, scroll)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow = "1"
+carson-proto = { path = "../carson-proto" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-graphics = { version = "0.25.0", features = ["highsierra"] }
+core-foundation = "0.10"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62.2", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging", "Win32_UI_HiDpi", "Win32_Foundation"] }
+
+[lints]
+workspace = true

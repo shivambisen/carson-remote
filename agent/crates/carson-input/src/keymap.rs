@@ -1,0 +1,131 @@
+//! DOM `KeyboardEvent.code` → native key identifiers. Physical codes make keys behave
+//! regardless of keyboard layout on either side.
+
+/// macOS virtual keycode (`kVK_*`, Carbon `Events.h`).
+pub fn mac_keycode(code: &str) -> Option<u16> {
+    Some(match code {
+        "KeyA" => 0x00, "KeyS" => 0x01, "KeyD" => 0x02, "KeyF" => 0x03, "KeyH" => 0x04,
+        "KeyG" => 0x05, "KeyZ" => 0x06, "KeyX" => 0x07, "KeyC" => 0x08, "KeyV" => 0x09,
+        "IntlBackslash" => 0x0A, "KeyB" => 0x0B, "KeyQ" => 0x0C, "KeyW" => 0x0D, "KeyE" => 0x0E,
+        "KeyR" => 0x0F, "KeyY" => 0x10, "KeyT" => 0x11, "Digit1" => 0x12, "Digit2" => 0x13,
+        "Digit3" => 0x14, "Digit4" => 0x15, "Digit6" => 0x16, "Digit5" => 0x17, "Equal" => 0x18,
+        "Digit9" => 0x19, "Digit7" => 0x1A, "Minus" => 0x1B, "Digit8" => 0x1C, "Digit0" => 0x1D,
+        "BracketRight" => 0x1E, "KeyO" => 0x1F, "KeyU" => 0x20, "BracketLeft" => 0x21, "KeyI" => 0x22,
+        "KeyP" => 0x23, "Enter" => 0x24, "KeyL" => 0x25, "KeyJ" => 0x26, "Quote" => 0x27,
+        "KeyK" => 0x28, "Semicolon" => 0x29, "Backslash" => 0x2A, "Comma" => 0x2B, "Slash" => 0x2C,
+        "KeyN" => 0x2D, "KeyM" => 0x2E, "Period" => 0x2F, "Tab" => 0x30, "Space" => 0x31,
+        "Backquote" => 0x32, "Backspace" => 0x33, "Escape" => 0x35, "MetaRight" => 0x36,
+        "MetaLeft" => 0x37, "ShiftLeft" => 0x38, "CapsLock" => 0x39, "AltLeft" => 0x3A,
+        "ControlLeft" => 0x3B, "ShiftRight" => 0x3C, "AltRight" => 0x3D, "ControlRight" => 0x3E,
+        "F17" => 0x40, "NumpadDecimal" => 0x41, "NumpadMultiply" => 0x43, "NumpadAdd" => 0x45,
+        "NumLock" => 0x47, "AudioVolumeUp" => 0x48, "AudioVolumeDown" => 0x49, "AudioVolumeMute" => 0x4A,
+        "NumpadDivide" => 0x4B, "NumpadEnter" => 0x4C, "NumpadSubtract" => 0x4E, "F18" => 0x4F,
+        "F19" => 0x50, "NumpadEqual" => 0x51, "Numpad0" => 0x52, "Numpad1" => 0x53, "Numpad2" => 0x54,
+        "Numpad3" => 0x55, "Numpad4" => 0x56, "Numpad5" => 0x57, "Numpad6" => 0x58, "Numpad7" => 0x59,
+        "F20" => 0x5A, "Numpad8" => 0x5B, "Numpad9" => 0x5C, "IntlYen" => 0x5D, "IntlRo" => 0x5E,
+        "F5" => 0x60, "F6" => 0x61, "F7" => 0x62, "F3" => 0x63, "F8" => 0x64, "F9" => 0x65,
+        "F11" => 0x67, "F13" => 0x69, "F16" => 0x6A, "F14" => 0x6B, "F10" => 0x6D,
+        "ContextMenu" => 0x6E, "F12" => 0x6F, "F15" => 0x71, "Insert" => 0x72, "Home" => 0x73,
+        "PageUp" => 0x74, "Delete" => 0x75, "F4" => 0x76, "End" => 0x77, "F2" => 0x78,
+        "PageDown" => 0x79, "F1" => 0x7A, "ArrowLeft" => 0x7B, "ArrowRight" => 0x7C,
+        "ArrowDown" => 0x7D, "ArrowUp" => 0x7E,
+        _ => return None,
+    })
+}
+
+/// Windows PC/AT set-1 scancode and whether it needs the E0 "extended" prefix.
+pub fn windows_scancode(code: &str) -> Option<(u16, bool)> {
+    let (sc, ext) = match code {
+        "Escape" => (0x01, false), "Digit1" => (0x02, false), "Digit2" => (0x03, false),
+        "Digit3" => (0x04, false), "Digit4" => (0x05, false), "Digit5" => (0x06, false),
+        "Digit6" => (0x07, false), "Digit7" => (0x08, false), "Digit8" => (0x09, false),
+        "Digit9" => (0x0A, false), "Digit0" => (0x0B, false), "Minus" => (0x0C, false),
+        "Equal" => (0x0D, false), "Backspace" => (0x0E, false), "Tab" => (0x0F, false),
+        "KeyQ" => (0x10, false), "KeyW" => (0x11, false), "KeyE" => (0x12, false), "KeyR" => (0x13, false),
+        "KeyT" => (0x14, false), "KeyY" => (0x15, false), "KeyU" => (0x16, false), "KeyI" => (0x17, false),
+        "KeyO" => (0x18, false), "KeyP" => (0x19, false), "BracketLeft" => (0x1A, false),
+        "BracketRight" => (0x1B, false), "Enter" => (0x1C, false), "ControlLeft" => (0x1D, false),
+        "KeyA" => (0x1E, false), "KeyS" => (0x1F, false), "KeyD" => (0x20, false), "KeyF" => (0x21, false),
+        "KeyG" => (0x22, false), "KeyH" => (0x23, false), "KeyJ" => (0x24, false), "KeyK" => (0x25, false),
+        "KeyL" => (0x26, false), "Semicolon" => (0x27, false), "Quote" => (0x28, false),
+        "Backquote" => (0x29, false), "ShiftLeft" => (0x2A, false), "Backslash" => (0x2B, false),
+        "KeyZ" => (0x2C, false), "KeyX" => (0x2D, false), "KeyC" => (0x2E, false), "KeyV" => (0x2F, false),
+        "KeyB" => (0x30, false), "KeyN" => (0x31, false), "KeyM" => (0x32, false), "Comma" => (0x33, false),
+        "Period" => (0x34, false), "Slash" => (0x35, false), "ShiftRight" => (0x36, false),
+        "NumpadMultiply" => (0x37, false), "AltLeft" => (0x38, false), "Space" => (0x39, false),
+        "CapsLock" => (0x3A, false), "F1" => (0x3B, false), "F2" => (0x3C, false), "F3" => (0x3D, false),
+        "F4" => (0x3E, false), "F5" => (0x3F, false), "F6" => (0x40, false), "F7" => (0x41, false),
+        "F8" => (0x42, false), "F9" => (0x43, false), "F10" => (0x44, false), "NumLock" => (0x45, true),
+        "ScrollLock" => (0x46, false), "Numpad7" => (0x47, false), "Numpad8" => (0x48, false),
+        "Numpad9" => (0x49, false), "NumpadSubtract" => (0x4A, false), "Numpad4" => (0x4B, false),
+        "Numpad5" => (0x4C, false), "Numpad6" => (0x4D, false), "NumpadAdd" => (0x4E, false),
+        "Numpad1" => (0x4F, false), "Numpad2" => (0x50, false), "Numpad3" => (0x51, false),
+        "Numpad0" => (0x52, false), "NumpadDecimal" => (0x53, false), "IntlBackslash" => (0x56, false),
+        "F11" => (0x57, false), "F12" => (0x58, false), "NumpadEqual" => (0x59, false),
+        "F13" => (0x64, false), "F14" => (0x65, false), "F15" => (0x66, false), "F16" => (0x67, false),
+        "F17" => (0x68, false), "F18" => (0x69, false), "F19" => (0x6A, false), "F20" => (0x6B, false),
+        "IntlRo" => (0x73, false), "IntlYen" => (0x7D, false),
+        "NumpadEnter" => (0x1C, true), "ControlRight" => (0x1D, true), "AudioVolumeMute" => (0x20, true),
+        "AudioVolumeDown" => (0x2E, true), "AudioVolumeUp" => (0x30, true), "NumpadDivide" => (0x35, true),
+        "PrintScreen" => (0x37, true), "AltRight" => (0x38, true), "Home" => (0x47, true),
+        "ArrowUp" => (0x48, true), "PageUp" => (0x49, true), "ArrowLeft" => (0x4B, true),
+        "ArrowRight" => (0x4D, true), "End" => (0x4F, true), "ArrowDown" => (0x50, true),
+        "PageDown" => (0x51, true), "Insert" => (0x52, true), "Delete" => (0x53, true),
+        "MetaLeft" => (0x5B, true), "MetaRight" => (0x5C, true), "ContextMenu" => (0x5D, true),
+        _ => return None,
+    };
+    Some((sc, ext))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    /// Every code a standard US/ISO keyboard produces.
+    fn standard_codes() -> Vec<String> {
+        let mut v: Vec<String> = ('A'..='Z').map(|c| format!("Key{c}")).collect();
+        v.extend((0..=9).map(|d| format!("Digit{d}")));
+        v.extend((1..=12).map(|n| format!("F{n}")));
+        v.extend((0..=9).map(|d| format!("Numpad{d}")));
+        for c in [
+            "Enter", "Escape", "Backspace", "Tab", "Space", "Minus", "Equal", "BracketLeft", "BracketRight",
+            "Backslash", "Semicolon", "Quote", "Backquote", "Comma", "Period", "Slash", "CapsLock",
+            "ShiftLeft", "ShiftRight", "ControlLeft", "ControlRight", "AltLeft", "AltRight", "MetaLeft",
+            "MetaRight", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "PageUp",
+            "PageDown", "Insert", "Delete", "NumpadAdd", "NumpadSubtract", "NumpadMultiply", "NumpadDivide",
+            "NumpadDecimal", "NumpadEnter", "NumLock", "ContextMenu", "IntlBackslash",
+        ] {
+            v.push(c.to_owned());
+        }
+        v
+    }
+
+    #[test]
+    fn standard_keys_map_on_both_platforms() {
+        for code in standard_codes() {
+            assert!(mac_keycode(&code).is_some(), "mac missing {code}");
+            assert!(windows_scancode(&code).is_some(), "windows missing {code}");
+        }
+    }
+
+    #[test]
+    fn mappings_are_injective() {
+        let codes = standard_codes();
+        let mac: HashSet<_> = codes.iter().filter_map(|c| mac_keycode(c)).collect();
+        let win: HashSet<_> = codes.iter().filter_map(|c| windows_scancode(c)).collect();
+        assert_eq!(mac.len(), codes.len(), "two DOM codes share a mac keycode");
+        assert_eq!(win.len(), codes.len(), "two DOM codes share a windows scancode");
+    }
+
+    #[test]
+    fn spot_checks_against_platform_headers() {
+        assert_eq!(mac_keycode("KeyA"), Some(0x00)); // kVK_ANSI_A
+        assert_eq!(mac_keycode("MetaLeft"), Some(0x37)); // kVK_Command
+        assert_eq!(mac_keycode("ArrowUp"), Some(0x7E)); // kVK_UpArrow
+        assert_eq!(windows_scancode("KeyA"), Some((0x1E, false)));
+        assert_eq!(windows_scancode("ArrowUp"), Some((0x48, true)));
+        assert_eq!(windows_scancode("NumpadEnter"), Some((0x1C, true)));
+        assert_eq!(mac_keycode("NotAKey"), None);
+    }
+}
