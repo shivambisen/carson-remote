@@ -17,7 +17,7 @@ const enc = new TextEncoder();
 const clampI16 = (v: number) => Math.max(-32768, Math.min(32767, Math.round(v)));
 const clampU16 = (v: number) => Math.max(0, Math.min(65535, Math.round(v)));
 
-export function encode(m: InputMessage): Uint8Array {
+export function encode(m: InputMessage): Uint8Array<ArrayBuffer> {
   switch (m.type) {
     case "pointer_move": {
       const b = new DataView(new ArrayBuffer(5));

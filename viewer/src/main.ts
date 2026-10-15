@@ -3,13 +3,15 @@ import { api, ApiError, loginUrl, type Device, type User } from "./api";
 import { h } from "./dom";
 import { osLabel, timeAgo } from "./format";
 import { formatCode, isCompleteCode } from "./pairing";
+import { FrameCoalescer, InputRouter, isViewerShortcut } from "./control";
+import { normalizePoint, wheelPixels } from "./input";
 import { describeReason, ViewerSession } from "./session";
 import { PresenceClient, type ConnectionStatus } from "./signaling";
 import { summarize, type StatsSample } from "./stats";
 
 const app = document.querySelector<HTMLElement>("#app")!;
 let presence: PresenceClient | null = null;
-let viewing: { session: ViewerSession; timer: ReturnType<typeof setInterval> } | null = null;
+let viewing: { session: ViewerSession; timer: ReturnType<typeof setInterval>; cleanup: () => void } | null = null;
 let user: User | null = null;
 
 type Route = { page: "login" | "devices" | "pair" | "view"; params: URLSearchParams; deviceId?: string };
@@ -155,9 +157,22 @@ function showView(deviceId: string): void {
   const video = h("video", { autoplay: true, playsinline: true, muted: true, class: "screen" });
   const overlay = h("div", { class: "overlay" }, "Connecting…");
   const stats = h("pre", { class: "stats", hidden: true });
-  const stage = h("div", { class: "stage" }, video, overlay, stats);
+  const toast = h("div", { class: "toast", hidden: true });
+  // The stage takes keyboard focus while controlling; clicking it focuses it.
+  const stage = h("div", { class: "stage", tabindex: "0" }, video, overlay, stats, toast);
+  const displaySelect = h("select", { class: "small", hidden: true, title: "Display" });
+  const controlToggle = h("input", { type: "checkbox", checked: true });
+  const controlLabel = h("label", { class: "toggle", title: "Send mouse and keyboard to the remote computer" }, controlToggle, " Control");
   const toggleStats = () => (stats.hidden = !stats.hidden);
-  const fullscreen = () => void (document.fullscreenElement ? document.exitFullscreen() : stage.requestFullscreen()).catch(() => {});
+  const fullscreen = () => {
+    if (document.fullscreenElement) return void document.exitFullscreen().catch(() => {});
+    void stage.requestFullscreen().then(() => {
+      // In fullscreen, Chrome lets us capture system keys (Esc must be held to exit).
+      const kb = (navigator as Navigator & { keyboard?: { lock?: () => Promise<void> } }).keyboard;
+      void kb?.lock?.().catch(() => {});
+      stage.focus();
+    }, () => {});
+  };
   render(
     h(
       "div",
@@ -170,6 +185,8 @@ function showView(deviceId: string): void {
           "div",
           { class: "row" },
           h("span", { class: "status", id: "view-status" }, "Connecting"),
+          displaySelect,
+          controlLabel,
           h("button", { class: "secondary small", onclick: toggleStats, title: "Ctrl+Alt+Shift+D" }, "Stats"),
           h("button", { class: "secondary small", onclick: fullscreen }, "Fullscreen"),
           h("button", { class: "small", onclick: () => { stopViewing(); location.hash = "#/devices"; } }, "Disconnect"),
@@ -179,25 +196,132 @@ function showView(deviceId: string): void {
     ),
   );
   const statusEl = document.querySelector<HTMLElement>("#view-status")!;
-  const session = new ViewerSession(deviceId, video, (s) => {
-    if (s.kind === "connecting") {
-      overlay.hidden = false;
-      overlay.textContent = s.detail;
-      statusEl.textContent = "Connecting";
-    } else if (s.kind === "live") {
-      overlay.hidden = true;
-      statusEl.textContent = "Live · view only";
-      statusEl.className = "status live";
-    } else {
-      overlay.hidden = false;
-      overlay.replaceChildren(
-        h("p", {}, describeReason(s.reason, s.message)),
-        h("a", { class: "button small", href: "#/devices" }, "Back to devices"),
-      );
-      statusEl.textContent = "Ended";
-      statusEl.className = "status";
-    }
+  let inputAvailable = false;
+  let pendingClipboard: string | null = null;
+  const showToast = (text: string) => {
+    toast.textContent = text;
+    toast.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => (toast.hidden = true), 2500);
+  };
+  let toastTimer: ReturnType<typeof setTimeout> | undefined;
+  const writeLocalClipboard = (text: string) =>
+    navigator.clipboard.writeText(text).then(() => showToast("Copied from remote computer"), () => (pendingClipboard = text));
+
+  const session = new ViewerSession(deviceId, video, {
+    onState: (s) => {
+      if (s.kind === "connecting") {
+        overlay.hidden = false;
+        overlay.textContent = s.detail;
+        statusEl.textContent = "Connecting";
+      } else if (s.kind === "live") {
+        overlay.hidden = true;
+        statusEl.textContent = "Live";
+        statusEl.className = "status live";
+        stage.focus();
+      } else {
+        overlay.hidden = false;
+        overlay.replaceChildren(
+          h("p", {}, describeReason(s.reason, s.message)),
+          h("a", { class: "button small", href: "#/devices" }, "Back to devices"),
+        );
+        statusEl.textContent = "Ended";
+        statusEl.className = "status";
+      }
+    },
+    onControl: (m) => {
+      if (m.type === "displays") {
+        displaySelect.replaceChildren(
+          ...m.displays.map((d) => h("option", { value: String(d.index), selected: d.index === m.current }, `${d.name} · ${d.width}×${d.height}`)),
+        );
+        displaySelect.hidden = m.displays.length < 2;
+      } else if (m.type === "input_status") {
+        inputAvailable = m.available;
+        controlToggle.disabled = !m.available;
+        controlToggle.checked = m.available;
+        controlLabel.title = m.available ? "Send mouse and keyboard to the remote computer" : m.message ?? "Input unavailable";
+        if (!m.available) showToast(`View only: ${m.message ?? "input unavailable"}`);
+      }
+    },
+    onClipboard: (text) => {
+      if (document.hasFocus()) void writeLocalClipboard(text);
+      else pendingClipboard = text;
+    },
   });
+  displaySelect.addEventListener("change", () => session.selectDisplay(Number(displaySelect.value)));
+
+  const controlling = () => inputAvailable && controlToggle.checked;
+  const router = new InputRouter((m) => session.sendInput(m));
+  const coalescer = new FrameCoalescer((m) => session.sendInput(m));
+  controlToggle.addEventListener("change", () => {
+    if (!controlToggle.checked) router.releaseAll();
+  });
+  const point = (e: PointerEvent | WheelEvent) =>
+    normalizePoint(e.clientX, e.clientY, video.getBoundingClientRect(), video.videoWidth, video.videoHeight);
+
+  stage.addEventListener("pointermove", (e) => {
+    if (!controlling()) return;
+    const p = point(e);
+    if (p) coalescer.pointer(p.x, p.y);
+  });
+  stage.addEventListener("pointerdown", (e) => {
+    stage.focus();
+    if (!controlling()) return;
+    const p = point(e);
+    if (!p) return;
+    e.preventDefault();
+    stage.setPointerCapture(e.pointerId); // keep receiving moves while dragging outside
+    coalescer.flush();
+    // The position goes on the ordered channel with the button, so the click lands exactly here.
+    session.sendInput({ type: "pointer_move", ...p }, true);
+    session.sendInput({ type: "button", button: e.button, down: true });
+  });
+  stage.addEventListener("pointerup", (e) => {
+    if (!controlling()) return;
+    coalescer.flush();
+    const p = point(e);
+    if (p) session.sendInput({ type: "pointer_move", ...p }, true);
+    session.sendInput({ type: "button", button: e.button, down: false });
+  });
+  stage.addEventListener("contextmenu", (e) => e.preventDefault());
+  stage.addEventListener(
+    "wheel",
+    (e) => {
+      if (!controlling()) return;
+      e.preventDefault();
+      const { dx, dy } = wheelPixels(e, stage.clientHeight);
+      coalescer.addWheel(dx, dy);
+    },
+    { passive: false },
+  );
+  const onKey = (e: KeyboardEvent) => {
+    if (isViewerShortcut(e)) {
+      if (e.type === "keydown") toggleStats();
+      e.preventDefault();
+      return;
+    }
+    if (!controlling()) return;
+    if (router.key(e)) e.preventDefault();
+  };
+  stage.addEventListener("keydown", onKey);
+  stage.addEventListener("keyup", onKey);
+  stage.addEventListener("paste", (e) => {
+    if (!controlling()) return;
+    e.preventDefault();
+    router.paste(e.clipboardData?.getData("text/plain") ?? "");
+  });
+  stage.addEventListener("blur", () => controlling() && router.releaseAll());
+  const onVisibility = () => document.hidden && controlling() && router.releaseAll();
+  const onFocus = () => {
+    if (pendingClipboard !== null) {
+      const text = pendingClipboard;
+      pendingClipboard = null;
+      void writeLocalClipboard(text);
+    }
+  };
+  document.addEventListener("visibilitychange", onVisibility);
+  window.addEventListener("focus", onFocus);
+
   let prev: StatsSample | null = null;
   const timer = setInterval(() => {
     const pc = session.peer;
@@ -210,23 +334,31 @@ function showView(deviceId: string): void {
         `${(st.kbps / 1000).toFixed(2)} Mbps\n` +
         `RTT ${st.rttMs ?? "–"} ms · jitter buf ${st.jitterBufferMs ?? "–"} ms\n` +
         `decode ${st.decodeMs ?? "–"} ms · lost ${st.packetsLost}\n` +
-        `path ${st.path} (${st.candidateType})`;
+        `path ${st.path} (${st.candidateType})\n` +
+        `input ${controlling() ? "on" : "off"}`;
     });
   }, 1000);
-  viewing = { session, timer };
+  viewing = {
+    session,
+    timer,
+    cleanup: () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("focus", onFocus);
+      if (controlling()) router.releaseAll();
+    },
+  };
+  (window as Window & { carsonSession?: ViewerSession }).carsonSession = session; // diagnostics
   session.start();
 }
 
 function stopViewing(): void {
   if (!viewing) return;
+  viewing.cleanup();
   clearInterval(viewing.timer);
   viewing.session.stop();
   viewing = null;
 }
 
-document.addEventListener("keydown", (e) => {
-  if (e.ctrlKey && e.altKey && e.shiftKey && e.code === "KeyD") document.querySelector<HTMLElement>(".stats")?.toggleAttribute("hidden");
-});
 
 function showPair(params: URLSearchParams): void {
   stopPresence();

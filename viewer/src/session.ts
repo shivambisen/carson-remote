@@ -2,7 +2,30 @@
  * One view-only session with a device: signaling over the carson WebSocket, media over
  * WebRTC. The agent offers (it owns the video track); the browser answers.
  */
+import { ClipboardAssembler, decodeClipboardChunk, encode, type InputMessage } from "./input";
 import { PROTOCOL_VERSION, signalingUrl, type Envelope } from "./signaling";
+
+export interface DisplayDescriptor {
+  index: number;
+  name: string;
+  width: number;
+  height: number;
+  primary: boolean;
+}
+
+export type ControlMessage =
+  | { type: "displays"; displays: DisplayDescriptor[]; current: number }
+  | { type: "input_status"; available: boolean; message?: string };
+
+export interface SessionCallbacks {
+  onState: (s: SessionState) => void;
+  onControl?: (m: ControlMessage) => void;
+  /** Text copied on the remote computer. */
+  onClipboard?: (text: string) => void;
+}
+
+/** Pointer moves are dropped (not queued) when the unreliable channel backs up. */
+const MAX_POINTER_BUFFER = 16 * 1024;
 
 export type SessionState =
   | { kind: "connecting"; detail: string }
@@ -40,12 +63,40 @@ export class ViewerSession {
   private pendingCandidates: RTCIceCandidateInit[] = [];
   private ended = false;
   private readonly requestId = crypto.randomUUID();
+  private ptr: RTCDataChannel | null = null;
+  private ctl: RTCDataChannel | null = null;
+  private readonly clipboard = new ClipboardAssembler();
+  private readonly onState: (s: SessionState) => void;
 
   constructor(
     private readonly deviceId: string,
     private readonly video: HTMLVideoElement,
-    private readonly onState: (s: SessionState) => void,
-  ) {}
+    private readonly callbacks: SessionCallbacks,
+  ) {
+    this.onState = callbacks.onState;
+  }
+
+  /**
+   * Sends one input message: pointer moves on the unreliable channel, the rest reliably.
+   * `reliable` forces a pointer move onto the ordered channel (right before a click, so the
+   * click cannot overtake it).
+   */
+  sendInput(m: InputMessage, reliable = false): void {
+    if (m.type === "pointer_move" && !reliable) {
+      if (this.ptr?.readyState === "open" && this.ptr.bufferedAmount < MAX_POINTER_BUFFER) this.ptr.send(encode(m));
+      return;
+    }
+    if (this.ctl?.readyState === "open") this.ctl.send(encode(m));
+  }
+
+  selectDisplay(index: number): void {
+    if (this.ctl?.readyState === "open") this.ctl.send(JSON.stringify({ type: "select_display", index }));
+  }
+
+  /** Channel properties as negotiated (diagnostics). */
+  channelInfo(): { label: string; ordered: boolean; maxRetransmits: number | null }[] {
+    return [this.ptr, this.ctl].filter((c): c is RTCDataChannel => !!c).map((c) => ({ label: c.label, ordered: c.ordered, maxRetransmits: c.maxRetransmits }));
+  }
 
   start(): void {
     this.onState({ kind: "connecting", detail: "Contacting server…" });
@@ -136,6 +187,15 @@ export class ViewerSession {
     pc.onicecandidate = (ev) => {
       if (ev.candidate) this.send("ice.candidate", ev.candidate.toJSON());
     };
+    pc.ondatachannel = (ev) => {
+      const dc = ev.channel;
+      dc.binaryType = "arraybuffer";
+      if (dc.label === "ptr") this.ptr = dc;
+      else if (dc.label === "ctl") {
+        this.ctl = dc;
+        dc.onmessage = (m: MessageEvent<string | ArrayBuffer>) => this.onControlMessage(m.data);
+      }
+    };
     pc.ontrack = (ev) => {
       // Ask the browser to play frames as soon as they decode (lowest latency).
       // jitterBufferTarget is standard; playoutDelayHint is Chrome's older spelling.
@@ -152,6 +212,21 @@ export class ViewerSession {
         this.end("connection_failed");
       }
     };
+  }
+
+  private onControlMessage(data: string | ArrayBuffer): void {
+    if (typeof data === "string") {
+      try {
+        this.callbacks.onControl?.(JSON.parse(data) as ControlMessage);
+      } catch {
+        // ignore malformed control text
+      }
+      return;
+    }
+    const chunk = decodeClipboardChunk(new Uint8Array(data));
+    if (!chunk) return;
+    const text = this.clipboard.push(chunk.last, chunk.data);
+    if (text !== null) this.callbacks.onClipboard?.(text);
   }
 
   private end(reason: string, message?: string): void {
