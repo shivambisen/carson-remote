@@ -17,3 +17,15 @@ all = { level = "warn", priority = -1 }
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+# Video work is unusable unoptimized: build dependencies and the media crates with
+# optimizations even in dev, keeping fast incremental builds for the rest.
+[profile.dev.package."*"]
+opt-level = 2
+debug = false # dependency debug info is most of target/'s size
+
+[profile.dev.package.carson-capture]
+opt-level = 2
+
+[profile.dev.package.carson-encode]
+opt-level = 2
