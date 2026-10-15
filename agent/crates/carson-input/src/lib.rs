@@ -67,6 +67,20 @@ pub fn native_backend() -> Result<Box<dyn Backend>> {
 }
 
 const MAX_BUTTON: u8 = 4;
+
+/// Modifier bits and their physical keys (left key is used when synthesizing).
+const MODIFIERS: [(u16, [&str; 2]); 4] = [
+    (
+        carson_proto::input::mods::SHIFT,
+        ["ShiftLeft", "ShiftRight"],
+    ),
+    (
+        carson_proto::input::mods::CTRL,
+        ["ControlLeft", "ControlRight"],
+    ),
+    (carson_proto::input::mods::ALT, ["AltLeft", "AltRight"]),
+    (carson_proto::input::mods::META, ["MetaLeft", "MetaRight"]),
+];
 const DOUBLE_CLICK_TIME: Duration = Duration::from_millis(500);
 const DOUBLE_CLICK_DISTANCE: f64 = 5.0;
 
@@ -136,8 +150,9 @@ impl Injector {
                     .button(*button, *down, self.pos.0, self.pos.1, clicks)
             }
             InputMessage::Wheel { dx, dy } => self.backend.scroll(i32::from(*dx), i32::from(*dy)),
-            InputMessage::Key { down, code, .. } => {
+            InputMessage::Key { down, mods, code } => {
                 if *down {
+                    self.sync_modifiers(*mods, code)?;
                     // Repeated keydowns (auto-repeat) are forwarded: injected keys do not repeat by themselves.
                     self.keys.insert(code.clone());
                 } else if !self.keys.remove(code) {
@@ -151,6 +166,30 @@ impl Injector {
             }
             InputMessage::ClipboardChunk { .. } => Ok(()), // handled by the agent's clipboard sync
         }
+    }
+
+    /// Makes held modifiers match the event's modifier bits before a non-modifier key.
+    /// Covers modifiers pressed before the viewer had focus (their keydown never arrived) or
+    /// released while it did not (their keyup never arrived).
+    fn sync_modifiers(&mut self, mods: u16, code: &str) -> Result<()> {
+        if MODIFIERS.iter().any(|(_, keys)| keys.contains(&code)) {
+            return Ok(());
+        }
+        for (bit, keys) in MODIFIERS {
+            let held = keys.iter().any(|k| self.keys.contains(*k));
+            let wanted = mods & bit != 0;
+            if wanted && !held {
+                self.keys.insert(keys[0].to_owned());
+                self.backend.key(keys[0], true)?;
+            } else if !wanted && held {
+                for k in keys {
+                    if self.keys.remove(k) {
+                        self.backend.key(k, false)?;
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     fn click_count(&mut self, button: u8) -> u32 {
@@ -294,7 +333,7 @@ mod tests {
         for code in ["ShiftLeft", "KeyA"] {
             inj.handle(&InputMessage::Key {
                 down: true,
-                mods: 0,
+                mods: carson_proto::input::mods::SHIFT,
                 code: code.into(),
             })
             .unwrap();
@@ -317,6 +356,37 @@ mod tests {
         );
         inj.handle(&InputMessage::ReleaseAll).unwrap();
         assert_eq!(ev.lock().unwrap().len(), 6, "second release_all is a no-op");
+    }
+
+    #[test]
+    fn modifiers_follow_the_event_bits() {
+        let (mut inj, ev) = injector(SECOND_MONITOR);
+        let key = |inj: &mut Injector, down, mods, code: &str| {
+            inj.handle(&InputMessage::Key {
+                down,
+                mods,
+                code: code.into(),
+            })
+            .unwrap()
+        };
+        // Shift held before focus: only KeyA arrives, but with the shift bit.
+        key(&mut inj, true, carson_proto::input::mods::SHIFT, "KeyA");
+        key(&mut inj, false, carson_proto::input::mods::SHIFT, "KeyA");
+        // Shift released while unfocused: next key has no shift bit.
+        key(&mut inj, true, 0, "KeyB");
+        // Real modifier keys are passed through untouched.
+        key(&mut inj, true, carson_proto::input::mods::META, "MetaLeft");
+        assert_eq!(
+            *ev.lock().unwrap(),
+            [
+                "key ShiftLeft down",
+                "key KeyA down",
+                "key KeyA up",
+                "key ShiftLeft up",
+                "key KeyB down",
+                "key MetaLeft down"
+            ]
+        );
     }
 
     #[test]

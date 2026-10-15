@@ -545,6 +545,38 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
 
+        // Display switching: the agent reopens the source and re-announces the displays.
+        ctl.send_text(r#"{"type":"select_display","index":0}"#)
+            .await
+            .unwrap();
+        let frames_before = frames.load(Ordering::Relaxed);
+        loop {
+            let ev = tokio::time::timeout(Duration::from_secs(5), ctl.poll())
+                .await
+                .expect("displays reply")
+                .unwrap();
+            if let DataChannelEvent::OnMessage(m) = ev
+                && m.is_string
+                && let Ok(ControlMessage::Displays { current, .. }) =
+                    serde_json::from_slice(&m.data)
+            {
+                assert_eq!(current, 0);
+                break;
+            }
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while frames.load(Ordering::Relaxed) < frames_before + 10 {
+            assert!(
+                Instant::now() < deadline,
+                "stream stalled after display switch"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        // An out-of-range index is ignored (no reply, stream keeps going).
+        ctl.send_text(r#"{"type":"select_display","index":7}"#)
+            .await
+            .unwrap();
+
         // A viewer hanging up ends the session cleanly, without a session.end echo.
         ev_tx.send(SessionEvent::RemoteEnd).unwrap();
         tokio::time::timeout(Duration::from_secs(5), session)
