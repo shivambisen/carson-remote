@@ -71,3 +71,6 @@ video.screen { width: 100%; height: 100%; object-fit: contain; background: #000;
 select.small { font: inherit; font-size: 14px; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--text); }
 label.toggle { display: inline-flex; gap: 6px; align-items: center; font-size: 14px; color: var(--text); cursor: pointer; }
 .toast { position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%); padding: 8px 14px; border-radius: 8px; background: rgba(0, 0, 0, 0.8); color: #e8eaee; font-size: 14px; pointer-events: none; }
+form.pin { position: absolute; display: flex; flex-direction: column; gap: 10px; width: min(320px, 90%); padding: 20px; border-radius: 12px; background: var(--card); border: 1px solid var(--border); color: var(--text); }
+form.pin h2 { margin: 0; font-size: 18px; }
+form.pin input { font-size: 22px; letter-spacing: 6px; text-align: center; }

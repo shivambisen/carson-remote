@@ -158,8 +158,18 @@ function showView(deviceId: string): void {
   const overlay = h("div", { class: "overlay" }, "Connecting…");
   const stats = h("pre", { class: "stats", hidden: true });
   const toast = h("div", { class: "toast", hidden: true });
+  const pinInput = h("input", { type: "password", inputmode: "numeric", autocomplete: "off", maxlength: "10", placeholder: "PIN", "aria-label": "PIN" });
+  const pinMessage = h("p", { class: "muted" }, "This computer is set up for unattended access. Enter its PIN.");
+  const pinForm = h(
+    "form",
+    { class: "pin card", hidden: true },
+    h("h2", {}, "Enter PIN"),
+    pinMessage,
+    pinInput,
+    h("button", { type: "submit" }, "Unlock"),
+  );
   // The stage takes keyboard focus while controlling; clicking it focuses it.
-  const stage = h("div", { class: "stage", tabindex: "0" }, video, overlay, stats, toast);
+  const stage = h("div", { class: "stage", tabindex: "0" }, video, overlay, stats, toast, pinForm);
   const displaySelect = h("select", { class: "small", hidden: true, title: "Display" });
   const controlToggle = h("input", { type: "checkbox", checked: true });
   const controlLabel = h("label", { class: "toggle", title: "Send mouse and keyboard to the remote computer" }, controlToggle, " Control");
@@ -220,6 +230,7 @@ function showView(deviceId: string): void {
         statusEl.className = "status live";
         stage.focus();
       } else {
+        pinForm.hidden = true;
         overlay.hidden = false;
         overlay.replaceChildren(
           h("p", {}, describeReason(s.reason, s.message)),
@@ -235,6 +246,23 @@ function showView(deviceId: string): void {
           ...m.displays.map((d) => h("option", { value: String(d.index), selected: d.index === m.current }, `${d.name} · ${d.width}×${d.height}`)),
         );
         displaySelect.hidden = m.displays.length < 2;
+      } else if (m.type === "pin_required") {
+        overlay.hidden = true;
+        pinForm.hidden = false;
+        pinInput.value = "";
+        pinInput.focus();
+      } else if (m.type === "pin_result") {
+        if (m.ok) {
+          pinForm.hidden = true;
+          stage.focus();
+        } else if (m.attempts_left > 0) {
+          pinMessage.textContent = `Wrong PIN. ${m.attempts_left} attempt${m.attempts_left === 1 ? "" : "s"} left.`;
+          pinMessage.className = "error";
+          pinInput.value = "";
+          pinInput.focus();
+        } else {
+          pinForm.hidden = true; // the session ends with pin_locked
+        }
       } else if (m.type === "input_status") {
         inputAvailable = m.available;
         controlToggle.disabled = !m.available;
@@ -249,6 +277,18 @@ function showView(deviceId: string): void {
     },
   });
   displaySelect.addEventListener("change", () => session.selectDisplay(Number(displaySelect.value)));
+  pinForm.addEventListener("submit", (e) => {
+    e.preventDefault();
+    if (/^\d{6,10}$/.test(pinInput.value)) session.sendPin(pinInput.value);
+    else {
+      pinMessage.textContent = "The PIN is 6 to 10 digits.";
+      pinMessage.className = "error";
+    }
+  });
+  // Keys typed into the PIN box must not reach the remote computer.
+  pinForm.addEventListener("keydown", (e) => e.stopPropagation());
+  pinForm.addEventListener("keyup", (e) => e.stopPropagation());
+  pinForm.addEventListener("pointerdown", (e) => e.stopPropagation());
 
   const controlling = () => inputAvailable && controlToggle.checked;
   const router = new InputRouter((m) => session.sendInput(m));

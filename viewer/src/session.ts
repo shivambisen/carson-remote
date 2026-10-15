@@ -15,7 +15,9 @@ export interface DisplayDescriptor {
 
 export type ControlMessage =
   | { type: "displays"; displays: DisplayDescriptor[]; current: number }
-  | { type: "input_status"; available: boolean; message?: string };
+  | { type: "input_status"; available: boolean; message?: string }
+  | { type: "pin_required"; attempts_left: number }
+  | { type: "pin_result"; ok: boolean; attempts_left: number; retry_after_s?: number };
 
 export interface SessionCallbacks {
   onState: (s: SessionState) => void;
@@ -50,6 +52,13 @@ const REASONS: Record<string, string> = {
   connect_timeout: "The connection timed out.",
   agent_error: "The agent hit an error and ended the session.",
   user: "Session ended.",
+  declined: "The person at that computer declined the connection.",
+  consent_timeout: "No one answered on the other computer within 30 seconds.",
+  consent_unavailable: "The other computer could not show the approval prompt. Set up unattended access with a PIN on it (carson-agent unattended on --pin).",
+  pin_locked: "Too many wrong PINs. Unattended access on that computer is locked for 15 minutes.",
+  pin_timeout: "The PIN was not entered in time.",
+  host_disconnected: "The person at the other computer ended the session.",
+  banner_unavailable: "The other computer could not show its \"being controlled\" notice, so the session was not started.",
 };
 
 export function describeReason(reason: string, message?: string): string {
@@ -87,6 +96,11 @@ export class ViewerSession {
       return;
     }
     if (this.ctl?.readyState === "open") this.ctl.send(encode(m));
+  }
+
+  /** Sends the unattended-access PIN. It travels only inside the encrypted data channel. */
+  sendPin(pin: string): void {
+    if (this.ctl?.readyState === "open") this.ctl.send(JSON.stringify({ type: "pin", pin }));
   }
 
   selectDisplay(index: number): void {
@@ -148,6 +162,7 @@ export class ViewerSession {
         this.sid = env.sid ?? null;
         const { ice_servers } = env.body as { ice_servers: IceServer[] };
         this.createPeer(ice_servers);
+        this.onState({ kind: "connecting", detail: "Waiting for the other computer to allow the connection…" });
         return;
       }
       case "session.accept":
