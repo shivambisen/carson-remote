@@ -503,3 +503,36 @@ func TestUnpaidAccountsCannotConnect(t *testing.T) {
 	}
 	expectSilence(t, s.agent, 150*time.Millisecond) // the computer is never contacted
 }
+
+func TestOneTimeDeviceLeavesAfterItsSession(t *testing.T) {
+	s := newSessionEnv(t)
+	ctx := context.Background()
+	// Mark the paired device as shared "just this once".
+	if _, err := s.store.DB().ExecContext(ctx, `UPDATE devices SET temporary = 1 WHERE id = ?`, s.deviceID); err != nil {
+		t.Fatal(err)
+	}
+	sid := s.request(t)
+	sendEnv(t, s.agent, protocol.TypeSessionAccept, sid, "", map[string]any{})
+	readType(t, s.viewer, protocol.TypeSessionAccept)
+	sendEnv(t, s.viewer, protocol.TypeSessionEnd, sid, "", protocol.SessionEnd{Reason: "user"})
+	readType(t, s.agent, protocol.TypeSessionEnd)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		d, err := s.store.GetDevice(ctx, s.deviceID)
+		if err == nil && d.RevokedAt != nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("one-time device still on the account after its session")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	// The agent is disconnected and can't come back.
+	if s.hub.Online(s.deviceID) {
+		time.Sleep(200 * time.Millisecond)
+		if s.hub.Online(s.deviceID) {
+			t.Fatal("one-time agent still online")
+		}
+	}
+}

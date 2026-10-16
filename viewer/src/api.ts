@@ -16,6 +16,8 @@ export interface Device {
   online: boolean;
   /** Ed25519 device key (base64url): verifies the agent's signed DTLS fingerprint. */
   public_key: string;
+  /** Shared "just this once" with a code: leaves the account after one session. */
+  temporary?: boolean;
 }
 
 export interface AuditEvent {
@@ -39,6 +41,7 @@ export interface PairingPreview {
   name: string;
   os: string;
   expires_at: string;
+  temporary?: boolean;
 }
 
 export interface Billing {

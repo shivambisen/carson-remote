@@ -504,3 +504,28 @@ func TestUnpaidAccountsCannotAddComputers(t *testing.T) {
 		t.Fatalf("approve without paying = %d", code)
 	}
 }
+
+func TestComputerCanRemoveItself(t *testing.T) {
+	e := newEnv(t)
+	removed := ""
+	e.svc.OnRevoke = func(id string) { removed = id }
+	ana := e.user(t, "ana@x.com")
+	key, devID := e.enroll(t, ana)
+	_, tok := e.token(t, key, devID)
+	if code, _ := e.call(t, nil, "/v1/device/leave", map[string]string{}, nil); code != http.StatusUnauthorized {
+		t.Fatalf("leave without a device token = %d", code)
+	}
+	req, _ := http.NewRequest(http.MethodPost, e.srv.URL+"/v1/device/leave", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent || removed != devID {
+		t.Fatalf("leave = %d (revoked %q)", resp.StatusCode, removed)
+	}
+	if code, _ := e.token(t, key, devID); code == http.StatusOK {
+		t.Fatal("a removed computer must not get tokens")
+	}
+}

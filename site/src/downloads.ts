@@ -14,6 +14,9 @@ export interface Download {
   href: string;
 }
 
+/** Windows without the installer: unzip and run glenley.exe (for PCs where installers fail). */
+export const WINDOWS_PORTABLE = `${LATEST}/glenley-windows-x86_64.zip`;
+
 export const DOWNLOADS: Record<Download["platform"], Download> = {
   "mac-arm": {
     platform: "mac-arm",

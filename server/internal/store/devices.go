@@ -18,21 +18,25 @@ type Device struct {
 	CreatedAt    time.Time  `json:"created_at"`
 	LastSeenAt   time.Time  `json:"last_seen_at"`
 	RevokedAt    *time.Time `json:"revoked_at,omitempty"`
+	// Temporary: shared "just this once"; removed after its first session ends.
+	Temporary bool `json:"temporary"`
 }
 
-const deviceCols = `id, user_id, name, os, public_key, agent_version, created_at, last_seen_at, revoked_at`
+const deviceCols = `id, user_id, name, os, public_key, agent_version, created_at, last_seen_at, revoked_at, temporary`
 
 func scanDevice(row interface{ Scan(...any) error }) (Device, error) {
 	var d Device
 	var created, seen int64
 	var revoked sql.NullInt64
-	if err := row.Scan(&d.ID, &d.UserID, &d.Name, &d.OS, &d.PublicKey, &d.AgentVersion, &created, &seen, &revoked); err != nil {
+	var temporary int64
+	if err := row.Scan(&d.ID, &d.UserID, &d.Name, &d.OS, &d.PublicKey, &d.AgentVersion, &created, &seen, &revoked, &temporary); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Device{}, ErrNotFound
 		}
 		return Device{}, err
 	}
 	d.CreatedAt, d.LastSeenAt = fromMS(created), fromMS(seen)
+	d.Temporary = temporary != 0
 	if revoked.Valid {
 		t := fromMS(revoked.Int64)
 		d.RevokedAt = &t
@@ -85,14 +89,16 @@ type Pairing struct {
 	DeviceID  string
 	CreatedAt time.Time
 	ExpiresAt time.Time
+	Temporary bool
 }
 
-const pairingCols = `id, code_hash, public_key, name, os, status, COALESCE(user_id, ''), COALESCE(device_id, ''), created_at, expires_at`
+const pairingCols = `id, code_hash, public_key, name, os, status, COALESCE(user_id, ''), COALESCE(device_id, ''), created_at, expires_at, temporary`
 
 func scanPairing(row interface{ Scan(...any) error }) (Pairing, error) {
 	var p Pairing
-	var created, expires int64
-	err := row.Scan(&p.ID, &p.CodeHash, &p.PublicKey, &p.Name, &p.OS, &p.Status, &p.UserID, &p.DeviceID, &created, &expires)
+	var created, expires, temporary int64
+	err := row.Scan(&p.ID, &p.CodeHash, &p.PublicKey, &p.Name, &p.OS, &p.Status, &p.UserID, &p.DeviceID, &created, &expires, &temporary)
+	p.Temporary = temporary != 0
 	if errors.Is(err, sql.ErrNoRows) {
 		return Pairing{}, ErrNotFound
 	}
@@ -101,8 +107,8 @@ func scanPairing(row interface{ Scan(...any) error }) (Pairing, error) {
 }
 
 func (s *Store) CreatePairing(ctx context.Context, p Pairing) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO pairings (id, code_hash, public_key, name, os, status, created_at, expires_at) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)`,
-		p.ID, p.CodeHash, p.PublicKey, p.Name, p.OS, ms(p.CreatedAt), ms(p.ExpiresAt))
+	_, err := s.db.ExecContext(ctx, `INSERT INTO pairings (id, code_hash, public_key, name, os, status, created_at, expires_at, temporary) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
+		p.ID, p.CodeHash, p.PublicKey, p.Name, p.OS, ms(p.CreatedAt), ms(p.ExpiresAt), b2i(p.Temporary))
 	if isUniqueViolation(err) {
 		return ErrConflict
 	}
@@ -138,9 +144,9 @@ func (s *Store) approvePairing(ctx context.Context, column string, key any, user
 		if err != nil {
 			return err
 		}
-		d = Device{ID: NewID("dev"), UserID: userID, Name: p.Name, OS: p.OS, PublicKey: p.PublicKey, CreatedAt: now}
-		_, err = tx.ExecContext(ctx, `INSERT INTO devices (id, user_id, name, os, public_key, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-			d.ID, d.UserID, d.Name, d.OS, d.PublicKey, ms(now))
+		d = Device{ID: NewID("dev"), UserID: userID, Name: p.Name, OS: p.OS, PublicKey: p.PublicKey, CreatedAt: now, Temporary: p.Temporary}
+		_, err = tx.ExecContext(ctx, `INSERT INTO devices (id, user_id, name, os, public_key, created_at, temporary) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			d.ID, d.UserID, d.Name, d.OS, d.PublicKey, ms(now), b2i(p.Temporary))
 		if isUniqueViolation(err) {
 			return ErrConflict // this key is already enrolled
 		}
@@ -161,7 +167,14 @@ func (s *Store) CreateDeviceToken(ctx context.Context, tokenHash []byte, deviceI
 // DeviceForToken resolves an unexpired access token to its (non-revoked) device.
 func (s *Store) DeviceForToken(ctx context.Context, tokenHash []byte, now time.Time) (Device, error) {
 	return scanDevice(s.db.QueryRowContext(ctx, `
-		SELECT d.id, d.user_id, d.name, d.os, d.public_key, d.agent_version, d.created_at, d.last_seen_at, d.revoked_at
+		SELECT d.id, d.user_id, d.name, d.os, d.public_key, d.agent_version, d.created_at, d.last_seen_at, d.revoked_at, d.temporary
 		FROM device_tokens t JOIN devices d ON d.id = t.device_id
 		WHERE t.token_hash = ? AND t.expires_at > ? AND d.revoked_at IS NULL`, tokenHash, ms(now)))
+}
+
+func b2i(b bool) int64 {
+	if b {
+		return 1
+	}
+	return 0
 }

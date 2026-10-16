@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { ArrowRight, Check, Code2, Download, KeyRound, Laptop, Lock, MonitorSmartphone, MousePointer2, Radio, ShieldCheck, Zap } from "lucide-react";
 
 import { MARK_PATH } from "./logo";
-import { APP_URL, currentUAData, detectPlatform, DOWNLOADS, refinePlatform, SOURCE_URL, type Platform } from "./downloads";
+import { APP_URL, currentUAData, detectPlatform, DOWNLOADS, refinePlatform, SOURCE_URL, WINDOWS_PORTABLE, type Platform } from "./downloads";
 
 function usePlatform(): Platform {
   const [platform, setPlatform] = useState<Platform>(() => detectPlatform(navigator.userAgent, currentUAData()));
@@ -519,6 +519,11 @@ function DownloadCard({ platform, current }: { platform: "mac-arm" | "windows"; 
             Intel Mac version
           </a>
         )}
+        {platform === "windows" && (
+          <a href={WINDOWS_PORTABLE} className="text-[13px] text-muted underline decoration-faint/50 underline-offset-4 hover:text-ink">
+            Portable zip (no installer)
+          </a>
+        )}
       </div>
       <p className="mt-5 text-[12px] leading-relaxed text-faint">
         {platform === "windows"
@@ -558,6 +563,8 @@ function Faq() {
     ["Who can connect to my computer?", "Only the account it was added to. You can remove a computer from your account at any time, and every connection is listed under Activity."],
     ["How much does it cost?", "₹99, once. There's no subscription: one payment gives your account glenley on all your computers, with every future update. Payments are handled by Razorpay (UPI, cards, netbanking)."],
     ["Is glenley open source?", "Yes, under the Apache 2.0 license. The video codec on Windows is Cisco's free OpenH264 (OpenH264 Video Codec provided by Cisco Systems, Inc.)."],
+    ["Windows says \"Setup was unable to create the directory …\\localtemp\"", "Windows is set to use a temporary folder that doesn't exist. Create that folder (for example E:\\localtemp) and run the installer again, or download the portable zip instead: unzip it and open glenley.exe."],
+    ["How do I let someone connect without signing in on their computer?", "On their computer, open the glenley menu and choose Connect with a code: Just this once, or Keep on their account. They read you the code; you enter it on app.glenley.in under Enter a code."],
     ["What if my network is strict?", "glenley connects computers directly. Most home and mobile networks work. Some office networks block direct connections; a relay for those is on the way."],
   ];
   return (

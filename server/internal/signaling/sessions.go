@@ -280,6 +280,27 @@ func (h *Handler) finish(s *session, by, reason string, notify *client) {
 	}
 	h.send(notify, protocol.TypeSessionEnd, s.id, "", protocol.SessionEnd{Reason: reason})
 	h.auditEnd(s, by, reason)
+	if s.accepted {
+		go h.removeIfOneTime(s.userID, s.deviceID)
+	}
+}
+
+// removeIfOneTime takes a computer shared "just this once" off the account once its session
+// (one that actually connected) is over, and disconnects its agent.
+func (h *Handler) removeIfOneTime(userID, deviceID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	d, err := h.Store.GetDevice(ctx, deviceID)
+	if err != nil || !d.Temporary || d.RevokedAt != nil {
+		return
+	}
+	if err := h.Store.RevokeDevice(ctx, userID, deviceID, h.Now()); err != nil {
+		h.Log.Error("remove one-time device", "device_id", deviceID, "err", err)
+		return
+	}
+	h.Log.Info("one-time device removed after its session", "user_id", userID, "device_id", deviceID)
+	h.Audit.Record(store.AuditEvent{UserID: userID, DeviceID: deviceID, Action: store.AuditDeviceRevoked, Detail: "one-time share ended"})
+	h.RevokeDevice(deviceID)
 }
 
 func (h *Handler) auditEnd(s *session, by, reason string) {

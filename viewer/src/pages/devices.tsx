@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Apple, Download, Laptop, MoreHorizontal, MonitorSmartphone, Trash2 } from "lucide-react";
+import { Apple, Download, KeyRound, Laptop, MoreHorizontal, MonitorSmartphone, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { api, type Device } from "@/api";
@@ -36,6 +36,7 @@ function DeviceRow({ device, onRemove }: { device: Device; onRemove: (d: Device)
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="truncate font-medium">{device.name}</span>
+          {device.temporary && <Badge variant="outline">One-time</Badge>}
           {device.online ? (
             <Badge variant="success" className="hidden sm:inline-flex">
               Online
@@ -96,8 +97,8 @@ function EmptyState() {
           <Download /> Download glenley
         </a>
       </Button>
-      <a href="#/pair" className="text-xs text-muted-foreground underline-offset-4 hover:underline">
-        Have a code instead?
+      <a href="#/pair" className="text-sm text-muted-foreground underline-offset-4 hover:underline">
+        Someone gave you a code? Enter it
       </a>
     </div>
   );
@@ -134,6 +135,11 @@ export function DevicesPage() {
         </div>
         <div className="flex items-center gap-3">
           {status !== "live" && <span className="text-sm text-muted-foreground">{status === "connecting" ? "Connecting…" : "Reconnecting…"}</span>}
+          <Button variant="outline" asChild>
+            <a href="#/pair">
+              <KeyRound /> Enter a code
+            </a>
+          </Button>
           {sorted && sorted.length > 0 && (
             <Button variant="outline" asChild>
               <a href={DOWNLOADS_URL} target="_blank" rel="noreferrer">

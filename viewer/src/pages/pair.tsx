@@ -11,7 +11,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 
-/** Fallback for computers without a browser: approve the code `glenley-agent pair` shows. */
+/**
+ * Join with a code: the person at the other computer chooses "Connect with a code" in glenley
+ * (or runs `glenley-agent pair --code`) and reads out the code; entering it here adds that
+ * computer to this account, for good or just for one session.
+ */
 export function PairPage({ params }: { params: URLSearchParams }) {
   const [code, setCode] = useState(formatCode(params.get("code") ?? ""));
   const [preview, setPreview] = useState<PairingPreview | null>(null);
@@ -26,7 +30,7 @@ export function PairPage({ params }: { params: URLSearchParams }) {
   const approve = () =>
     api.pairApprove(code).then(
       (d) => {
-        toast.success(`Added ${d.name}`);
+        toast.success(`Added ${d.name}. It shows as online in a few seconds: then click Connect.`);
         navigate("#/devices");
       },
       (err) => setError(errorMessage(err)),
@@ -36,8 +40,10 @@ export function PairPage({ params }: { params: URLSearchParams }) {
     <div className="mx-auto max-w-md">
       <Card>
         <CardHeader>
-          <CardTitle>Add with a code</CardTitle>
-          <CardDescription>For computers without a browser: enter the code that glenley shows there.</CardDescription>
+          <CardTitle className="font-serif text-3xl font-normal tracking-[-0.02em]">Enter a code</CardTitle>
+          <CardDescription>
+            On the other computer, open the glenley menu and choose <strong>Connect with a code</strong>. Type the code it shows.
+          </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
           {error && (
@@ -48,8 +54,12 @@ export function PairPage({ params }: { params: URLSearchParams }) {
           {preview ? (
             <>
               <p className="text-sm">
-                Add <strong>{preview.name}</strong> ({osLabel(preview.os)}) to your account? Only approve a code you started yourself.
+                Connect to <strong>{preview.name}</strong> ({osLabel(preview.os)})?{" "}
+                {preview.temporary
+                  ? "It was shared just this once: it leaves your account when you disconnect."
+                  : "It stays in your devices until you or they remove it."}
               </p>
+              <p className="text-xs text-muted-foreground">Only continue with a code the person at that computer gave you.</p>
               <div className="flex gap-2">
                 <Button onClick={() => void approve()}>Add computer</Button>
                 <Button variant="outline" onClick={() => setPreview(null)}>

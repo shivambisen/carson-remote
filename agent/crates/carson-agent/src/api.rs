@@ -105,12 +105,37 @@ impl Api {
         .into())
     }
 
-    pub async fn pair_start(&self, key: &DeviceKey, name: &str, os: &str) -> Result<PairStart> {
+    /// `temporary`: shared "just this once" (the server removes it after one session).
+    pub async fn pair_start(
+        &self,
+        key: &DeviceKey,
+        name: &str,
+        os: &str,
+        temporary: bool,
+    ) -> Result<PairStart> {
         self.post(
             "/v1/pair/start",
-            json!({"public_key": key.public_key_b64(), "name": name, "os": os}),
+            json!({"public_key": key.public_key_b64(), "name": name, "os": os, "temporary": temporary}),
         )
         .await
+    }
+
+    /// Removes this computer from its account (proven with the device key).
+    pub async fn leave(&self, device_id: &str, key: &DeviceKey) -> Result<()> {
+        let token = self.access_token(device_id, key).await?;
+        let resp = self
+            .http
+            .post(format!("{}/v1/device/leave", self.base))
+            .bearer_auth(token)
+            .send()
+            .await
+            .context("POST /v1/device/leave")?;
+        anyhow::ensure!(
+            resp.status().is_success(),
+            "server answered {}",
+            resp.status()
+        );
+        Ok(())
     }
 
     /// Finishes a browser sign-in with the grant the browser handed to our loopback listener.

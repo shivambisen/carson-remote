@@ -111,10 +111,11 @@ jobs:
         run: |
           cd dist
           cp glenley-setup-*-windows-x86_64.exe glenley-setup-windows-x86_64.exe
+          cp glenley-agent-*-windows-x86_64.zip glenley-windows-x86_64.zip
           for a in arm64 x86_64; do cp glenley-*-macos-$a.zip glenley-macos-$a.zip; done
           ls -la
       - name: Checksums (paste the macOS ones into the Homebrew formula)
-        run: cd dist && sha256sum glenley-setup-windows-x86_64.exe glenley-macos-*.zip > direct-SHA256SUMS && cat *.sha256 server-SHA256SUMS direct-SHA256SUMS | tee SHA256SUMS
+        run: cd dist && sha256sum glenley-setup-windows-x86_64.exe glenley-windows-x86_64.zip glenley-macos-*.zip > direct-SHA256SUMS && cat *.sha256 server-SHA256SUMS direct-SHA256SUMS | tee SHA256SUMS
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*

@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 
 use anyhow::{Context, Result};
-use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
 use crate::{config, service};
@@ -22,7 +22,12 @@ const DEFAULT_SERVER: Option<&str> = option_env!("CARSON_DEFAULT_SERVER");
 /// Tray → agent.
 enum Cmd {
     SignIn,
-    SignOut,
+    /// Show a code for someone else to enter; `once`: leave their account after one session.
+    Code {
+        once: bool,
+    },
+    /// Remove this computer from its account (server too) and forget it here.
+    Leave,
     Quit,
 }
 
@@ -32,6 +37,8 @@ enum Note {
     Paired(Option<String>),
     /// A one-line problem to show in the menu.
     Problem(Option<String>),
+    /// The connection code to show (None: no code pending).
+    Code(Option<String>),
     /// The agent has stopped; the app can exit.
     Stopped,
 }
@@ -94,48 +101,94 @@ async fn controller(
             let _ = notes.send(Note::Problem(None));
             tokio::select! {
                 r = crate::run(dir.clone(), crate::media::MediaOptions::default()) => {
-                    let msg = r.err().map_or_else(|| "Stopped".to_owned(), |e| format!("{e:#}"));
+                    let err = r.err();
+                    let removed = err.as_ref().is_some_and(|e| {
+                        matches!(e.downcast_ref::<crate::api::ApiError>(), Some(crate::api::ApiError::DeviceRejected))
+                    });
+                    if removed {
+                        // Removed on the website, or a one-time share ended: start over here.
+                        tracing::info!("this computer was removed from its account");
+                        sign_out(&dir);
+                        let _ = notes.send(Note::Problem(Some("Removed from the account".into())));
+                        continue;
+                    }
+                    let msg = err.map_or_else(|| "Stopped".to_owned(), |e| format!("{e:#}"));
                     tracing::error!(error = %msg, "agent stopped");
                     let _ = notes.send(Note::Problem(Some(short(&msg))));
-                    // Wait for the user (sign out / quit) rather than retrying a fatal error.
+                    // Wait for the user (remove / quit) rather than retrying a fatal error.
                     match cmds.recv().await {
-                        Some(Cmd::SignOut) => sign_out(&dir),
+                        Some(Cmd::Leave) => leave(&dir).await,
                         Some(Cmd::Quit) | None => return,
-                        Some(Cmd::SignIn) => {}
+                        Some(_) => {}
                     }
                 }
                 c = cmds.recv() => match c {
-                    Some(Cmd::SignOut) => sign_out(&dir),
+                    Some(Cmd::Leave) => leave(&dir).await,
                     Some(Cmd::Quit) | None => return,
-                    Some(Cmd::SignIn) => {}
+                    Some(_) => {}
                 },
             }
             continue;
         }
-        match cmds.recv().await {
-            Some(Cmd::SignIn) => {
-                let Some(server) = server.clone().or_else(|| DEFAULT_SERVER.map(str::to_owned))
-                else {
-                    let _ = notes.send(Note::Problem(Some(
-                        "No server configured: run `glenley-agent setup --server <URL>`".into(),
-                    )));
-                    continue;
-                };
+        let mut next = cmds.recv().await;
+        // A new choice (e.g. a code instead of signing in) cancels the one in progress.
+        while let Some(cmd @ (Cmd::SignIn | Cmd::Code { .. })) = next.take() {
+            let Some(server) = server.clone().or_else(|| DEFAULT_SERVER.map(str::to_owned)) else {
                 let _ = notes.send(Note::Problem(Some(
-                    "Finish signing in in your browser…".into(),
+                    "No server configured: run `glenley-agent setup --server <URL>`".into(),
                 )));
-                tokio::select! {
-                    r = crate::pair(dir.clone(), &server, None, true) => {
-                        let _ = notes.send(Note::Problem(r.err().map(|e| short(&format!("{e:#}")))));
-                    }
-                    c = cmds.recv() => {
-                        let _ = notes.send(Note::Problem(None));
-                        if matches!(c, Some(Cmd::Quit) | None) { return; }
+                break;
+            };
+            let (opts, waiting) = match cmd {
+                Cmd::Code { once } => {
+                    let code_notes = notes.clone();
+                    let opts = crate::PairOptions {
+                        temporary: once,
+                        on_code: Some(Box::new(move |code: &str| {
+                            let _ = code_notes.send(Note::Code(Some(code.to_owned())));
+                            crate::ui::show_info(
+                                "glenley connection code",
+                                &format!(
+                                    "Your code: {code}\n\nGive it to the person who will connect. They open glenley in their browser and choose \"Enter a code\".{}\n\nThe code works for 10 minutes.",
+                                    if once {
+                                        "\n\nThis computer leaves their account after the session."
+                                    } else {
+                                        ""
+                                    }
+                                ),
+                            );
+                        })),
+                        ..Default::default()
+                    };
+                    (opts, "Waiting for the code to be entered…")
+                }
+                _ => (
+                    crate::PairOptions {
+                        open_browser: true,
+                        ..Default::default()
+                    },
+                    "Finish signing in in your browser…",
+                ),
+            };
+            let _ = notes.send(Note::Problem(Some(waiting.into())));
+            tokio::select! {
+                r = crate::pair_with(dir.clone(), &server, None, opts) => {
+                    let _ = notes.send(Note::Code(None));
+                    let _ = notes.send(Note::Problem(r.err().map(|e| short(&format!("{e:#}")))));
+                }
+                c = cmds.recv() => {
+                    let _ = notes.send(Note::Code(None));
+                    let _ = notes.send(Note::Problem(None));
+                    // The abandoned pairing expires on the server; its key is replaced by the next one.
+                    match c {
+                        Some(Cmd::Quit) | None => return,
+                        other => next = other,
                     }
                 }
             }
-            Some(Cmd::Quit) | None => return,
-            Some(Cmd::SignOut) => {}
+        }
+        if matches!(next, Some(Cmd::Quit)) {
+            return;
         }
     }
 }
@@ -143,6 +196,12 @@ async fn controller(
 fn sign_out(dir: &std::path::Path) {
     if let Err(e) = crate::unpair(dir.to_path_buf()) {
         tracing::error!(error = %format!("{e:#}"), "sign out failed");
+    }
+}
+
+async fn leave(dir: &std::path::Path) {
+    if let Err(e) = crate::leave(dir.to_path_buf()).await {
+        tracing::error!(error = %format!("{e:#}"), "remove from account failed");
     }
 }
 
@@ -159,6 +218,10 @@ struct Ui {
     tray: TrayIcon,
     status: MenuItem,
     sign_in: MenuItem,
+    code_menu: Submenu,
+    code_once: MenuItem,
+    code_keep: MenuItem,
+    copy_code: MenuItem,
     website: MenuItem,
     ask: CheckMenuItem,
     indicator: CheckMenuItem,
@@ -172,6 +235,8 @@ struct Ui {
     last_status: String,
     /// "Sign in" was clicked and has not completed yet.
     signing_in: bool,
+    /// The connection code being shown, if any.
+    code: Option<String>,
 }
 
 impl Ui {
@@ -179,6 +244,11 @@ impl Ui {
         let cfg = config::load(dir).ok().flatten();
         let status = MenuItem::new("Starting…", false, None);
         let sign_in = MenuItem::new("Sign in…", true, None);
+        let code_once = MenuItem::new("Just this once", true, None);
+        let code_keep = MenuItem::new("Keep on their account", true, None);
+        let code_menu =
+            Submenu::with_items("Connect with a code", true, &[&code_once, &code_keep])?;
+        let copy_code = MenuItem::new("Copy code", false, None);
         let website = MenuItem::new("Open glenley website", true, None);
         let ask = CheckMenuItem::new(
             "Ask before each connection",
@@ -193,13 +263,15 @@ impl Ui {
             None,
         );
         let login = CheckMenuItem::new("Start at login", true, service::is_installed(), None);
-        let sign_out = MenuItem::new("Sign out of this computer", cfg.is_some(), None);
+        let sign_out = MenuItem::new("Remove from account", cfg.is_some(), None);
         let quit = MenuItem::new("Quit glenley", true, None);
         let menu = Menu::new();
         menu.append_items(&[
             &status,
+            &copy_code,
             &PredefinedMenuItem::separator(),
             &sign_in,
+            &code_menu,
             &website,
             &PredefinedMenuItem::separator(),
             &ask,
@@ -222,6 +294,10 @@ impl Ui {
             tray,
             status,
             sign_in,
+            code_menu,
+            code_once,
+            code_keep,
+            copy_code,
             website,
             ask,
             indicator,
@@ -234,6 +310,7 @@ impl Ui {
             look: Look::Offline,
             last_status: String::new(),
             signing_in: false,
+            code: None,
         })
     }
 
@@ -266,6 +343,7 @@ impl Ui {
                     self.paired = name;
                 }
                 Note::Problem(p) => self.problem = p,
+                Note::Code(c) => self.code = c,
                 Note::Stopped => return false,
             }
         }
@@ -277,7 +355,17 @@ impl Ui {
                 self.signing_in = true;
                 let _ = cmds.send(Cmd::SignIn);
             } else if id == self.sign_out.id() {
-                let _ = cmds.send(Cmd::SignOut);
+                let _ = cmds.send(Cmd::Leave);
+            } else if id == self.code_once.id() || id == self.code_keep.id() {
+                let once = id == self.code_once.id();
+                let _ = cmds.send(Cmd::Code { once });
+            } else if id == self.copy_code.id() {
+                if let Some(code) = &self.code
+                    && let Err(e) =
+                        arboard::Clipboard::new().and_then(|mut c| c.set_text(code.clone()))
+                {
+                    self.problem = Some(short(&format!("Copy failed: {e}")));
+                }
             } else if id == self.website.id() {
                 let url = self
                     .server
@@ -329,6 +417,9 @@ impl Ui {
         };
         let status = match (&live, &self.paired) {
             (Some(label), _) => label.clone(),
+            (None, None) if self.code.is_some() => {
+                format!("Your code: {}", self.code.as_deref().unwrap_or_default())
+            }
             (None, None) => self
                 .problem
                 .clone()
@@ -346,6 +437,8 @@ impl Ui {
         }
         let signed_in = self.paired.is_some();
         self.sign_in.set_enabled(!signed_in);
+        self.code_menu.set_enabled(!signed_in);
+        self.copy_code.set_enabled(self.code.is_some());
         self.sign_out.set_enabled(signed_in);
         self.ask.set_enabled(signed_in);
         self.indicator.set_enabled(signed_in);

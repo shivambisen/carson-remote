@@ -86,6 +86,20 @@ impl Banner {
     }
 }
 
+/// Shows an informational window (e.g. the connection code) without waiting for it.
+pub fn show_info(title: &str, message: &str) {
+    let spawned = std::env::current_exe().and_then(|exe| {
+        std::process::Command::new(exe)
+            .args(["ui", "info", "--title", title, "--message", message])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .spawn()
+    });
+    if let Err(e) = spawned {
+        tracing::warn!(error = %e, "could not show the info window");
+    }
+}
+
 /// Entry point of the hidden `ui` subcommand.
 pub fn helper_main(args: &[String]) -> Result<()> {
     let get = |flag: &str| -> Result<&str> {
@@ -100,6 +114,7 @@ pub fn helper_main(args: &[String]) -> Result<()> {
             let allowed = carson_hostui::prompt(get("--title")?, get("--message")?)?;
             std::process::exit(if allowed { EXIT_ALLOW } else { EXIT_DENY });
         }
+        Some("info") => carson_hostui::info(get("--title")?, get("--message")?),
         Some("banner") => {
             // If the agent goes away, so does the banner.
             std::thread::spawn(|| {
@@ -108,6 +123,8 @@ pub fn helper_main(args: &[String]) -> Result<()> {
             });
             carson_hostui::banner(get("--text")?)
         }
-        _ => bail!("usage: glenley-agent ui prompt --title T --message M | ui banner --text T"),
+        _ => bail!(
+            "usage: glenley-agent ui prompt --title T --message M | ui info --title T --message M | ui banner --text T"
+        ),
     }
 }

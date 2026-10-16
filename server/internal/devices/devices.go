@@ -105,6 +105,7 @@ func (s *Service) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/pair/complete", s.handlePairComplete)
 	mux.HandleFunc("POST /v1/device/challenge", s.handleChallenge)
 	mux.HandleFunc("POST /v1/device/token", s.handleToken)
+	mux.HandleFunc("POST /v1/device/leave", s.handleLeave)
 	mux.Handle("GET /v1/devices", s.Auth.RequireUser(http.HandlerFunc(s.handleList)))
 	mux.Handle("POST /v1/devices/{id}/revoke", s.Auth.RequireUser(http.HandlerFunc(s.handleRevoke)))
 	mux.Handle("GET /v1/audit", s.Auth.RequireUser(http.HandlerFunc(s.handleAudit)))
@@ -163,6 +164,8 @@ func (s *Service) handlePairStart(w http.ResponseWriter, r *http.Request) {
 		PublicKey string `json:"public_key"`
 		Name      string `json:"name"`
 		OS        string `json:"os"`
+		// Temporary: "just this once"; the computer leaves the account after one session.
+		Temporary bool `json:"temporary"`
 	}
 	if err := httpx.DecodeJSON(w, r, &body); err != nil {
 		httpx.WriteError(w, http.StatusBadRequest, "bad_request", err.Error())
@@ -185,7 +188,7 @@ func (s *Service) handlePairStart(w http.ResponseWriter, r *http.Request) {
 	now := s.Now()
 	for range 5 { // retry on the (astronomically unlikely) code collision
 		code := NewUserCode()
-		p := store.Pairing{ID: store.NewID("pair"), CodeHash: codeHash(code), PublicKey: pk, Name: name, OS: body.OS, CreatedAt: now, ExpiresAt: now.Add(PairingTTL)}
+		p := store.Pairing{ID: store.NewID("pair"), CodeHash: codeHash(code), PublicKey: pk, Name: name, OS: body.OS, CreatedAt: now, ExpiresAt: now.Add(PairingTTL), Temporary: body.Temporary}
 		err := s.Store.CreatePairing(r.Context(), p)
 		if errors.Is(err, store.ErrConflict) {
 			continue
@@ -271,7 +274,7 @@ func (s *Service) handlePairLookup(w http.ResponseWriter, r *http.Request) {
 		s.internal(w, "lookup pairing", err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"name": p.Name, "os": p.OS, "expires_at": p.ExpiresAt})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"name": p.Name, "os": p.OS, "expires_at": p.ExpiresAt, "temporary": p.Temporary})
 }
 
 func (s *Service) handlePairApprove(w http.ResponseWriter, r *http.Request) {
@@ -536,6 +539,26 @@ func (s *Service) handleRevoke(w http.ResponseWriter, r *http.Request) {
 	s.Audit.Record(store.AuditEvent{UserID: u.ID, DeviceID: id, Action: store.AuditDeviceRevoked, IP: s.ip(r), UserAgent: r.UserAgent()})
 	if s.OnRevoke != nil {
 		s.OnRevoke(id)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleLeave lets a computer remove itself from its account ("Remove from account" in the
+// glenley app), authenticated by its own device token.
+func (s *Service) handleLeave(w http.ResponseWriter, r *http.Request) {
+	d, err := s.DeviceFromRequest(r.Context(), r)
+	if err != nil {
+		httpx.WriteError(w, http.StatusUnauthorized, "unauthenticated", "device token required")
+		return
+	}
+	if err := s.Store.RevokeDevice(r.Context(), d.UserID, d.ID, s.Now()); err != nil && !errors.Is(err, store.ErrNotFound) {
+		s.internal(w, "device leave", err)
+		return
+	}
+	s.Log.Info("device left its account", "user_id", d.UserID, "device_id", d.ID)
+	s.Audit.Record(store.AuditEvent{UserID: d.UserID, DeviceID: d.ID, Action: store.AuditDeviceRevoked, IP: s.ip(r), UserAgent: r.UserAgent(), Detail: "removed from the computer"})
+	if s.OnRevoke != nil {
+		s.OnRevoke(d.ID)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

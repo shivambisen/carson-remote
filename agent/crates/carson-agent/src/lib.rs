@@ -49,6 +49,9 @@ COMMANDS:
     run [MEDIA OPTIONS]                   Stay online and share this screen with your viewers
     capture-check [MEDIA OPTIONS]         Check screen capture works (permission, frame rate)
     status                                Show pairing state
+    pair --server <URL> --code [--once]   Show a code someone else enters to add this computer
+                                          (--once: it leaves their account after one session)
+    leave                                 Remove this computer from its account and forget it
     unpair                                Forget this computer's identity (local only)
     service install | uninstall | status  Start glenley automatically at login (or stop doing so)
     ask on | off                          Ask \"Allow?\" here before each connection (default off)
@@ -80,7 +83,13 @@ enum Command {
     Pair {
         server: String,
         name: Option<String>,
+        /// Only show a code for someone else to enter (no browser sign-in here).
+        code: bool,
+        /// Shared just this once.
+        once: bool,
     },
+    /// Remove this computer from its account (on the server too) and forget it here.
+    Leave,
     Run {
         media: media::MediaOptions,
         /// Running under the OS service manager: fatal errors stop the service quietly.
@@ -139,6 +148,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Cli> {
     let (mut service_mode, mut no_browser, mut no_service) = (false, false, false);
     let mut service_action: Option<ServiceAction> = None;
     let mut pin = false;
+    let (mut code_only, mut once) = (false, false);
     fn number<T>(flag: &str, v: String, min: T, max: T) -> Result<T>
     where
         T: std::str::FromStr + PartialOrd + std::fmt::Display,
@@ -230,7 +240,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Cli> {
                 media.clipboard = false;
             }
             "pair" | "setup" | "service" | "run" | "capture-check" | "status" | "unpair"
-            | "app" | "unattended" | "ask" | "indicator"
+            | "leave" | "app" | "unattended" | "ask" | "indicator"
                 if command.is_none() =>
             {
                 command = Some(arg)
@@ -250,6 +260,8 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Cli> {
                 unattended = Some(arg == "on");
             }
             "--pin" => pin = true,
+            "--code" => code_only = true,
+            "--once" => once = true,
             "--log-file" => log_file = Some(PathBuf::from(value("--log-file")?)),
             "--service" => service_mode = true,
             "--no-browser" => no_browser = true,
@@ -271,7 +283,10 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Cli> {
         Some("pair") => Command::Pair {
             server: server.context("pair needs --server <URL>")?,
             name,
+            code: code_only || once,
+            once,
         },
+        Some(c) if code_only || once => bail!("--code/--once only apply to pair, not {c}"),
         Some("setup") => Command::Setup {
             server: server
                 .context("setup needs --server <URL> (the address of your glenley server)")?,
@@ -304,6 +319,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Cli> {
         }
         Some("status") => Command::Status,
         Some("unpair") => Command::Unpair,
+        Some("leave") => Command::Leave,
         Some(_) => unreachable!(),
     };
     Ok(Cli {
@@ -350,7 +366,39 @@ fn default_name() -> String {
     }
 }
 
+pub(crate) type CodeCallback = Box<dyn Fn(&str) + Send>;
+
+/// How a computer joins an account.
+#[derive(Default)]
+pub(crate) struct PairOptions {
+    /// Open the browser sign-in page (otherwise only print the link and code).
+    pub open_browser: bool,
+    /// Shared "just this once": removed from the account after one session.
+    pub temporary: bool,
+    /// Called with the code to read out ("BCDF-GHJK") as soon as it exists.
+    pub on_code: Option<CodeCallback>,
+}
+
 async fn pair(dir: PathBuf, server: &str, name: Option<String>, open_browser: bool) -> Result<()> {
+    pair_with(
+        dir,
+        server,
+        name,
+        PairOptions {
+            open_browser,
+            ..Default::default()
+        },
+    )
+    .await
+}
+
+pub(crate) async fn pair_with(
+    dir: PathBuf,
+    server: &str,
+    name: Option<String>,
+    opts: PairOptions,
+) -> Result<()> {
+    let open_browser = opts.open_browser;
     if let Some(existing) = config::load(&dir)? {
         bail!(
             "already paired with {} as {} ({}); run `glenley-agent unpair` first",
@@ -367,8 +415,11 @@ async fn pair(dir: PathBuf, server: &str, name: Option<String>, open_browser: bo
     store.save(&key.seed()).context("save device key")?;
 
     let start = api
-        .pair_start(&key, &name, carson_proto::current_os())
+        .pair_start(&key, &name, carson_proto::current_os(), opts.temporary)
         .await?;
+    if let Some(f) = &opts.on_code {
+        f(&start.user_code);
+    }
     // Browser sign-in (no code): the page hands a one-time grant back to this loopback port.
     let loopback = signin::Loopback::bind().await?;
     let link = loopback.url(&server, &start.pairing_id);
@@ -377,7 +428,7 @@ async fn pair(dir: PathBuf, server: &str, name: Option<String>, open_browser: bo
         println!("(opened in your browser)");
     }
     println!(
-        "Waiting for you to sign in (expires in {} minutes)…\nNo browser on this computer? Sign in elsewhere, choose \"Add with a code\" and enter {}.",
+        "Waiting for you to sign in (expires in {} minutes)…\nOr connect from another computer: choose \"Enter a code\" there and type {}.",
         start.expires_in / 60,
         start.user_code
     );
@@ -685,6 +736,17 @@ fn set_unattended(dir: PathBuf, enable: bool, with_pin: bool) -> Result<()> {
     Ok(())
 }
 
+/// Removes this computer from its account on the server, then forgets it here. If the server
+/// can't be reached it is still forgotten here (remove it on the website too).
+pub(crate) async fn leave(dir: PathBuf) -> Result<()> {
+    if let Ok((cfg, key)) = load_paired(&dir)
+        && let Err(e) = Api::new(&cfg.server_url)?.leave(&cfg.device_id, &key).await
+    {
+        tracing::warn!(error = %format!("{e:#}"), "could not reach the server; forgetting this computer locally");
+    }
+    unpair(dir)
+}
+
 fn unpair(dir: PathBuf) -> Result<()> {
     if let Some(cfg) = config::load(&dir)? {
         keystore::default_store(&cfg.server_url, &dir)?.delete()?;
@@ -785,7 +847,33 @@ async fn cli_main(cli: Cli, dir: PathBuf) -> ExitCode {
             );
             Ok(())
         }
-        Command::Pair { server, name } => pair(dir, &server, name, false).await,
+        Command::Pair {
+            server,
+            name,
+            code: false,
+            ..
+        } => pair(dir, &server, name, false).await,
+        Command::Pair {
+            server, name, once, ..
+        } => {
+            pair_with(
+                dir,
+                &server,
+                name,
+                PairOptions {
+                    temporary: once,
+                    on_code: Some(Box::new(move |code| {
+                        println!(
+                            "\n    Connection code:  {code}\n\nGive it to the person who will connect: they enter it at their glenley website under \"Enter a code\".{}\n",
+                            if once { " This computer leaves their account after the session." } else { "" }
+                        )
+                    })),
+                    ..Default::default()
+                },
+            )
+            .await
+        }
+        Command::Leave => leave(dir).await,
         Command::Run {
             media,
             service: true,
@@ -870,7 +958,7 @@ mod tests {
     fn parses_commands() {
         assert!(matches!(
             parse(&["pair", "--server", "https://c.example", "--name", "Mac"]).unwrap().command,
-            Command::Pair { server, name: Some(name) } if server == "https://c.example" && name == "Mac"
+            Command::Pair { server, name: Some(name), .. } if server == "https://c.example" && name == "Mac"
         ));
         let cli = parse(&["--config-dir", "/tmp/x", "--log-format", "json", "run"]).unwrap();
         assert!(matches!(cli.command, Command::Run { service: false, .. }));

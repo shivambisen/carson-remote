@@ -5,7 +5,7 @@
 //! - [`banner`] shows a small always-on-top pill and returns when Disconnect is clicked
 //!   (optional: glenley-agent shows it only when "Show on-screen indicator" is on).
 
-pub use native::{banner, prompt};
+pub use native::{banner, info, prompt};
 
 #[cfg(target_os = "macos")]
 mod native {
@@ -39,6 +39,21 @@ mod native {
         alert.addButtonWithTitle(&NSString::from_str("Allow"));
         alert.window().setLevel(NSStatusWindowLevel);
         Ok(alert.runModal() == NSAlertSecondButtonReturn)
+    }
+
+    /// A plain message with an OK button (e.g. the connection code).
+    pub fn info(title: &str, message: &str) -> Result<()> {
+        let mtm = MainThreadMarker::new().context("info must run on the main thread")?;
+        let app = app(mtm);
+        app.activate();
+        let alert = NSAlert::new(mtm);
+        alert.setAlertStyle(NSAlertStyle::Informational);
+        alert.setMessageText(&NSString::from_str(title));
+        alert.setInformativeText(&NSString::from_str(message));
+        alert.addButtonWithTitle(&NSString::from_str("OK"));
+        alert.window().setLevel(NSStatusWindowLevel);
+        alert.runModal();
+        Ok(())
     }
 
     pub fn banner(text: &str) -> Result<()> {
@@ -114,10 +129,10 @@ mod native {
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::UI::WindowsAndMessaging::{
         BS_PUSHBUTTON, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW,
-        GetSystemMetrics, HMENU, IDYES, MB_DEFBUTTON2, MB_ICONWARNING, MB_SETFOREGROUND,
-        MB_TOPMOST, MB_YESNO, MSG, MessageBoxW, PostQuitMessage, RegisterClassW, SM_CXSCREEN,
-        TranslateMessage, WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WNDCLASSW, WS_BORDER, WS_CHILD,
-        WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
+        GetSystemMetrics, HMENU, IDYES, MB_DEFBUTTON2, MB_ICONINFORMATION, MB_ICONWARNING, MB_OK,
+        MB_SETFOREGROUND, MB_TOPMOST, MB_YESNO, MSG, MessageBoxW, PostQuitMessage, RegisterClassW,
+        SM_CXSCREEN, TranslateMessage, WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WNDCLASSW, WS_BORDER,
+        WS_CHILD, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
     };
     use windows::core::{HSTRING, PCWSTR, w};
 
@@ -134,6 +149,22 @@ mod native {
             )
         };
         Ok(r == IDYES)
+    }
+
+    /// A plain message with an OK button (e.g. the connection code).
+    pub fn info(title: &str, message: &str) -> Result<()> {
+        let text = HSTRING::from(message);
+        let caption = HSTRING::from(title);
+        // SAFETY: valid null-terminated strings; no owner window.
+        unsafe {
+            MessageBoxW(
+                None,
+                &text,
+                &caption,
+                MB_OK | MB_ICONINFORMATION | MB_TOPMOST | MB_SETFOREGROUND,
+            );
+        }
+        Ok(())
     }
 
     const DISCONNECT_ID: usize = 1;
@@ -232,5 +263,10 @@ mod native {
 
     pub fn banner(_text: &str) -> Result<()> {
         bail!("no banner on this OS yet")
+    }
+
+    pub fn info(title: &str, message: &str) -> Result<()> {
+        println!("{title}\n\n{message}");
+        Ok(())
     }
 }

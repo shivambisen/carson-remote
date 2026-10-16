@@ -299,3 +299,6 @@ func OpenInSchema(ctx context.Context, dsn, schema string) (*Store, error) {
 	u.Host = strings.Replace(u.Host, "-pooler.", ".", 1)
 	return openPostgresSchema(ctx, u.String(), schema)
 }
+
+// DB exposes the handle for tests in other packages that need to set up unusual rows.
+func (s *Store) DB() *DB { return s.db }

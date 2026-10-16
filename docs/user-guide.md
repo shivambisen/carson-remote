@@ -30,7 +30,8 @@ The glenley menu:
 | Ask before each connection | Show Allow / Deny here for every connection (off by default) |
 | Show on-screen indicator | A small "being viewed" pill while connected (off by default) |
 | Start at login | Keep this computer reachable after a restart (on after signing in) |
-| Sign out of this computer | Forget this computer's identity here (remove it on the website too) |
+| Connect with a code | Show a code someone enters on their glenley website (just this once, or keep) |
+| Remove from account | Take this computer off the account (on the website too) and forget it here |
 | Quit glenley | Go offline until glenley is started again |
 
 **The tray / menu-bar icon always turns orange while someone is connected.** That can't be
@@ -39,6 +40,19 @@ turned off: the person at the computer can always tell.
 Computers without a browser (servers, scripts) can use the command-line tool instead:
 `glenley-agent setup --server https://YOUR-CARSON-SERVER`, then enter the code it prints under
 **Add with a code** on the website.
+
+### Connect with a code (no sign-in on that computer)
+
+To reach someone else's computer, or one you don't want to sign in on: in the glenley menu
+there, choose **Connect with a code**:
+
+- **Just this once**: the computer leaves your account as soon as you disconnect.
+- **Keep on their account**: it stays in your devices until removed.
+
+glenley shows a code like `BCDF-GHJK`. On app.glenley.in click **Enter a code** and type it;
+the computer appears in your devices. Remove it any time with **Remove** on the website or
+**Remove from account** in the glenley menu on that computer. (Command line:
+`glenley-agent pair --server https://app.glenley.in --code [--once]` and `glenley-agent leave`.)
 
 ## 2. Connect from another computer
 
@@ -72,6 +86,7 @@ account. Under **Devices**, click **Connect** next to an online computer.
 
 | Problem | Fix |
 |---|---|
+| Windows installer: "Setup was unable to create the directory …\\localtemp" | Windows' temporary folder doesn't exist: create it (e.g. `E:\\localtemp`) and run the installer again, or use the portable zip |
 | Device shows offline | Is glenley running (icon in the menu bar / tray)? Start it from Applications / the Start menu. Log: `agent.log` in the glenley settings folder |
 | Black screen / "permission" message | Mac: allow Screen Recording for glenley, then Quit and reopen glenley |
 | Can view but not control | Mac: allow Accessibility for glenley |

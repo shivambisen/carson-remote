@@ -81,4 +81,19 @@ wait_for 10 sh -c "curl -fsS -b '$JAR' '$URL/v1/devices' | grep -q '\"online\":f
 echo "device offline after agent stopped"
 
 "$AGENT" status | grep -q '^paired' || fail "status"
+
+# Join with a code, "just this once", then remove it from the computer's side.
+export CARSON_AGENT_DIR="$WORK/agent-code"
+"$AGENT" pair --server "$URL" --name "code host" --code --once >"$WORK/pair-code.out" 2>&1 &
+CODE_PID=$!
+wait_for 15 grep -q 'Connection code:' "$WORK/pair-code.out" || fail "agent did not print a connection code"
+CODE=$(sed -n 's/.*Connection code:  *\([A-Z-]*\).*/\1/p' "$WORK/pair-code.out")
+api /v1/pair/lookup "{\"code\":\"$CODE\"}" | grep -q '"temporary":true' || fail "lookup did not show a one-time share"
+api /v1/pair/approve "{\"code\":\"$CODE\"}" >/dev/null || fail "approve code"
+wait $CODE_PID || fail "code pairing exited non-zero"
+devices | grep -q '"name":"code host".*"temporary":true\|"temporary":true.*"name":"code host"' || fail "one-time device not listed"
+echo "paired with a code (one-time)"
+"$AGENT" leave >/dev/null || fail "leave"
+devices | grep -q '"name":"code host"' && fail "device still listed after leave"
+echo "removed from the computer's side"
 echo "PASS"
