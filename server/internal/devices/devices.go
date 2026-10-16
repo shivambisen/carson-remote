@@ -10,11 +10,13 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
 
+	"carson/server/internal/audit"
 	"carson/server/internal/auth"
 	"carson/server/internal/httpx"
 	"carson/server/internal/ratelimit"
@@ -49,6 +51,7 @@ type Limiters struct {
 	PairCode   *ratelimit.Limiter // per user and per IP: code lookups/approvals (anti-guessing)
 	PairPoll   *ratelimit.Limiter // per IP
 	DeviceAuth *ratelimit.Limiter // per IP
+	Revoke     *ratelimit.Limiter // per user (nil = unlimited)
 }
 
 // Service wires the device endpoints.
@@ -60,6 +63,9 @@ type Service struct {
 	TrustProxy bool
 	Log        *slog.Logger
 	Now        func() time.Time
+	Audit      *audit.Log
+	// OnRevoke disconnects a revoked device's agent and ends its sessions (signaling hub).
+	OnRevoke func(deviceID string)
 
 	mu         sync.Mutex
 	challenges map[string]challenge // nonce → challenge
@@ -78,6 +84,8 @@ func (s *Service) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/device/challenge", s.handleChallenge)
 	mux.HandleFunc("POST /v1/device/token", s.handleToken)
 	mux.Handle("GET /v1/devices", s.Auth.RequireUser(http.HandlerFunc(s.handleList)))
+	mux.Handle("POST /v1/devices/{id}/revoke", s.Auth.RequireUser(http.HandlerFunc(s.handleRevoke)))
+	mux.Handle("GET /v1/audit", s.Auth.RequireUser(http.HandlerFunc(s.handleAudit)))
 }
 
 // NewUserCode returns a random code like "BCDF-GHJK" (20^8 ≈ 2.6e10 possibilities).
@@ -259,6 +267,7 @@ func (s *Service) handlePairApprove(w http.ResponseWriter, r *http.Request) {
 		s.internal(w, "approve pairing", err)
 	default:
 		s.Log.Info("device paired", "user_id", u.ID, "device_id", d.ID, "os", d.OS)
+		s.Audit.Record(store.AuditEvent{UserID: u.ID, DeviceID: d.ID, Action: store.AuditDevicePaired, IP: s.ip(r), UserAgent: r.UserAgent(), Detail: d.Name})
 		httpx.WriteJSON(w, http.StatusOK, d)
 	}
 }
@@ -364,10 +373,53 @@ func (s *Service) DeviceFromRequest(ctx context.Context, r *http.Request) (store
 	return s.Store.DeviceForToken(ctx, store.HashToken(token), s.Now())
 }
 
-// DeviceView is a device as shown to its owner.
+// DeviceView is a device as shown to its owner. PublicKey lets the viewer verify the agent's
+// signed DTLS fingerprint (end-to-end identity, see docs §7).
 type DeviceView struct {
 	store.Device
-	Online bool `json:"online"`
+	Online    bool   `json:"online"`
+	PublicKey string `json:"public_key"`
+}
+
+// View builds the owner's view of a device.
+func View(d store.Device, online bool) DeviceView {
+	return DeviceView{Device: d, Online: online, PublicKey: b64.EncodeToString(d.PublicKey)}
+}
+
+func (s *Service) handleRevoke(w http.ResponseWriter, r *http.Request) {
+	u, _ := auth.UserFrom(r.Context())
+	if s.Limits.Revoke != nil && !s.Limits.Revoke.Allow(u.ID) {
+		tooMany(w)
+		return
+	}
+	id := r.PathValue("id")
+	err := s.Store.RevokeDevice(r.Context(), u.ID, id, s.Now())
+	if errors.Is(err, store.ErrNotFound) {
+		httpx.WriteError(w, http.StatusNotFound, "not_found", "no such device on your account")
+		return
+	}
+	if err != nil {
+		s.internal(w, "revoke device", err)
+		return
+	}
+	s.Log.Info("device revoked", "user_id", u.ID, "device_id", id)
+	s.Audit.Record(store.AuditEvent{UserID: u.ID, DeviceID: id, Action: store.AuditDeviceRevoked, IP: s.ip(r), UserAgent: r.UserAgent()})
+	if s.OnRevoke != nil {
+		s.OnRevoke(id)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Service) handleAudit(w http.ResponseWriter, r *http.Request) {
+	u, _ := auth.UserFrom(r.Context())
+	before, _ := strconv.ParseInt(r.URL.Query().Get("before"), 10, 64)
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	events, err := s.Store.ListAudit(r.Context(), u.ID, before, limit)
+	if err != nil {
+		s.internal(w, "list audit", err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"events": events})
 }
 
 func (s *Service) handleList(w http.ResponseWriter, r *http.Request) {
@@ -379,7 +431,7 @@ func (s *Service) handleList(w http.ResponseWriter, r *http.Request) {
 	}
 	views := make([]DeviceView, len(list))
 	for i, d := range list {
-		views[i] = DeviceView{Device: d, Online: s.Presence.Online(d.ID)}
+		views[i] = View(d, s.Presence.Online(d.ID))
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"devices": views})
 }

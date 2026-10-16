@@ -10,6 +10,7 @@ import (
 	"github.com/coder/websocket"
 
 	"carson/server/internal/protocol"
+	"carson/server/internal/store"
 )
 
 // peer wraps a test connection with a background reader. coder/websocket closes a
@@ -123,6 +124,16 @@ func waitOnline(t *testing.T, h *Hub, id string) {
 }
 
 // request starts a session and returns its sid as seen by the viewer and agent.
+// viewerUser returns the viewer's user ID (ana@x.com).
+func (s *sessionEnv) viewerUser(t *testing.T) string {
+	t.Helper()
+	u, err := s.store.UpsertUserForIdentity(context.Background(), store.Identity{Provider: "dev", Subject: "ana@x.com", Email: "ana@x.com"}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u.ID
+}
+
 func (s *sessionEnv) request(t *testing.T) string {
 	t.Helper()
 	sendEnv(t, s.viewer, protocol.TypeSessionRequest, "", "req-1", protocol.SessionRequest{DeviceID: s.deviceID})
@@ -375,5 +386,107 @@ func TestTurnCredsCarryTimeLimitedTURN(t *testing.T) {
 	_ = json.Unmarshal(env.Body, &c)
 	if len(c.ICEServers) != 2 || c.ICEServers[1].Username == "" || !strings.HasSuffix(c.ICEServers[1].Username, ":"+env.SID) {
 		t.Fatalf("ice servers = %+v", c.ICEServers)
+	}
+}
+
+func TestSessionLifecycleIsAudited(t *testing.T) {
+	s := newSessionEnv(t)
+	sid := s.request(t)
+	sendEnv(t, s.agent, protocol.TypeSessionAccept, sid, "", map[string]any{})
+	readType(t, s.viewer, protocol.TypeSessionAccept)
+	sendEnv(t, s.viewer, protocol.TypeSessionEnd, sid, "", protocol.SessionEnd{Reason: "user"})
+	readType(t, s.agent, protocol.TypeSessionEnd)
+
+	events, err := s.store.ListAudit(context.Background(), s.viewerUser(t), 0, 10)
+	if err != nil || len(events) != 3 {
+		t.Fatalf("events = %+v %v", events, err)
+	}
+	// Newest first.
+	if events[2].Action != store.AuditSessionRequest || events[1].Action != store.AuditSessionAccepted ||
+		events[0].Action != store.AuditSessionEnded || !strings.HasPrefix(events[0].Detail, "reason=user by=viewer duration=") {
+		t.Fatalf("audit = %+v", events)
+	}
+	for _, e := range events {
+		if e.SID != sid || e.IP == "" || e.DeviceName != "Mac" {
+			t.Fatalf("audit row missing who/where: %+v", e)
+		}
+	}
+}
+
+func TestRevokeEndsSessionAndKicksAgent(t *testing.T) {
+	s := newSessionEnv(t)
+	sid := s.request(t)
+	s.handler.RevokeDevice(s.deviceID)
+
+	env := readType(t, s.viewer, protocol.TypeSessionEnd)
+	var end protocol.SessionEnd
+	_ = json.Unmarshal(env.Body, &end)
+	if env.SID != sid || end.Reason != "device_revoked" {
+		t.Fatalf("viewer got %+v %+v", env, end)
+	}
+	select {
+	case _, ok := <-s.agent.msgs:
+		for ok {
+			_, ok = <-s.agent.msgs
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("agent was not disconnected")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for s.hub.Online(s.deviceID) {
+		if time.Now().After(deadline) {
+			t.Fatal("revoked device still online")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	events, _ := s.store.ListAudit(context.Background(), s.viewerUser(t), 0, 1)
+	if len(events) != 1 || events[0].Detail != "reason=device_revoked by=owner" {
+		t.Fatalf("revocation not audited: %+v", events)
+	}
+}
+
+func TestFloodingConnectionIsClosed(t *testing.T) {
+	s := newSessionEnv(t)
+	for i := range 200 {
+		msg, _ := protocol.Reply(protocol.TypeICECandidate, "ses_nope", "", map[string]int{"n": i})
+		if err := s.viewer.conn.Write(context.Background(), websocket.MessageText, msg); err != nil {
+			break // closed mid-flood: expected
+		}
+	}
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case _, ok := <-s.viewer.msgs:
+			if !ok {
+				return // closed
+			}
+		case <-deadline:
+			t.Fatal("flooding connection was not closed")
+		}
+	}
+}
+
+func TestResumeAttemptsAreRateLimited(t *testing.T) {
+	s := newSessionEnv(t)
+	sid := s.request(t)
+	var last protocol.SessionResume
+	for range 4 {
+		last = resumeOn(t, s.viewer, sid, "guess")
+	}
+	if last.Resumed || last.Reason != protocol.ReasonRateLimited {
+		t.Fatalf("4th attempt = %+v", last)
+	}
+}
+
+func TestServerRejectionsAreAuditedWithoutLeakingOthersDevices(t *testing.T) {
+	s := newSessionEnv(t)
+	bo, boCookie := s.session(t, "bo@x.com")
+	boConn, _, _ := s.dialViewer(t, boCookie, s.srv.URL)
+	p := newPeer(boConn)
+	sendEnv(t, p, protocol.TypeSessionRequest, "", "r", protocol.SessionRequest{DeviceID: s.deviceID})
+	readType(t, p, protocol.TypeSessionReject)
+	events, _ := s.store.ListAudit(context.Background(), bo.ID, 0, 5)
+	if len(events) != 1 || events[0].Action != store.AuditSessionRejected || events[0].DeviceID != "" || events[0].DeviceName != "" {
+		t.Fatalf("bo's audit = %+v", events)
 	}
 }

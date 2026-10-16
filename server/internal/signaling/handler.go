@@ -10,6 +10,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"carson/server/internal/audit"
 	"carson/server/internal/auth"
 	"carson/server/internal/devices"
 	"carson/server/internal/httpx"
@@ -24,6 +25,7 @@ const (
 	CloseReplaced websocket.StatusCode = 4000 // same device connected again
 	CloseTimeout  websocket.StatusCode = 4001 // heartbeat missed
 	CloseSlow     websocket.StatusCode = 4002 // client could not keep up
+	CloseRevoked  websocket.StatusCode = 4003 // device revoked by its owner
 )
 
 // Handler serves /v1/ws for both viewers (session cookie) and agents (bearer token).
@@ -45,9 +47,21 @@ type Handler struct {
 	// SessionLimiter bounds session.request per user.
 	SessionLimiter *ratelimit.Limiter
 	TrustProxy     bool
+	Audit          *audit.Log
+	// UpgradeLimiter bounds WebSocket connects per IP; ResumeLimiter bounds session.resume
+	// attempts per account/device. Both nil-safe.
+	UpgradeLimiter *ratelimit.Limiter
+	ResumeLimiter  *ratelimit.Limiter
+	// MessageRate / MessageBurst bound inbound messages per connection (0 = defaults).
+	MessageRate  int
+	MessageBurst int
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if h.UpgradeLimiter != nil && !h.UpgradeLimiter.Allow(httpx.ClientIP(r, h.TrustProxy)) {
+		httpx.WriteError(w, http.StatusTooManyRequests, "rate_limited", "too many connections")
+		return
+	}
 	if r.Header.Get("Authorization") != "" {
 		h.serveAgent(w, r)
 		return
@@ -95,7 +109,7 @@ func (h *Handler) serveViewer(w http.ResponseWriter, r *http.Request) {
 	defer h.Hub.removeViewer(c)
 	views := make([]devices.DeviceView, len(list))
 	for i, d := range list {
-		views[i] = devices.DeviceView{Device: d, Online: h.Hub.Online(d.ID)}
+		views[i] = devices.View(d, h.Hub.Online(d.ID))
 	}
 	hello, _ := protocol.NewEnvelope(protocol.TypeHelloOK, map[string]any{"user": u, "devices": views})
 	c.enqueue(hello)
@@ -184,7 +198,9 @@ func closer(conn *websocket.Conn, cancel context.CancelFunc) func(string) {
 			code = CloseTimeout
 		case "slow consumer":
 			code = CloseSlow
-		case "bad hello", "bad message":
+		case "revoked":
+			code = CloseRevoked
+		case "bad hello", "bad message", "rate limited":
 			code = websocket.StatusPolicyViolation
 		}
 		if code == CloseTimeout {
@@ -203,9 +219,19 @@ func closer(conn *websocket.Conn, cancel context.CancelFunc) func(string) {
 
 func (h *Handler) readLoop(ctx context.Context, conn *websocket.Conn, c *client, handle func(protocol.Envelope)) {
 	defer c.close("read done")
+	rate, burst := h.MessageRate, h.MessageBurst
+	if rate <= 0 {
+		rate, burst = 200, 400 // trickle ICE bursts are ~tens of messages
+	}
+	flood := ratelimit.New(rate, time.Second, burst) // per connection
 	for {
 		typ, data, err := conn.Read(ctx)
 		if err != nil {
+			return
+		}
+		if !flood.Allow("") {
+			h.Log.Warn("closing flooding connection", "user_id", c.userID, "device_id", c.deviceID)
+			c.close("rate limited")
 			return
 		}
 		var env protocol.Envelope

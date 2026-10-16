@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -154,5 +155,61 @@ func TestDeviceTokens(t *testing.T) {
 	got, _ := s.GetDevice(ctx, d.ID)
 	if got.AgentVersion != "0.2.0" || got.OS != "o" || !got.LastSeenAt.Equal(t0.Add(time.Minute)) {
 		t.Fatalf("touch: %+v", got)
+	}
+}
+
+func TestAuditLogIsPerUserNewestFirstAndPrunable(t *testing.T) {
+	s, ctx := newStore(t), context.Background()
+	add := func(user, action string, at time.Time) {
+		if err := s.AddAudit(ctx, AuditEvent{At: at, UserID: user, Action: action, IP: "203.0.113.9", UserAgent: strings.Repeat("u", 999)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add("usr_a", AuditSessionRequest, t0)
+	add("usr_b", AuditSessionRequest, t0)
+	add("usr_a", AuditSessionEnded, t0.Add(time.Minute))
+
+	got, err := s.ListAudit(ctx, "usr_a", 0, 10)
+	if err != nil || len(got) != 2 || got[0].Action != AuditSessionEnded || got[1].Action != AuditSessionRequest {
+		t.Fatalf("list = %+v %v", got, err)
+	}
+	if len(got[0].UserAgent) != 256 {
+		t.Fatalf("user agent not clipped: %d", len(got[0].UserAgent))
+	}
+	page, _ := s.ListAudit(ctx, "usr_a", got[0].ID, 10)
+	if len(page) != 1 || page[0].ID != got[1].ID {
+		t.Fatalf("pagination: %+v", page)
+	}
+
+	_ = s.PruneAudit(ctx, t0.Add(30*time.Second))
+	got, _ = s.ListAudit(ctx, "usr_a", 0, 10)
+	if len(got) != 1 || got[0].Action != AuditSessionEnded {
+		t.Fatalf("after prune: %+v", got)
+	}
+}
+
+func TestRevokeDevice(t *testing.T) {
+	s, ctx := newStore(t), context.Background()
+	u, _ := s.UpsertUserForIdentity(ctx, Identity{Provider: "dev", Subject: "a@x", Email: "a@x"}, t0)
+	other, _ := s.UpsertUserForIdentity(ctx, Identity{Provider: "dev", Subject: "b@x", Email: "b@x"}, t0)
+	_ = s.CreatePairing(ctx, Pairing{ID: "pair_r", CodeHash: HashToken("R"), PublicKey: []byte("pk-r"), Name: "Mac", OS: "macos", CreatedAt: t0, ExpiresAt: t0.Add(time.Hour)})
+	d, _ := s.ApprovePairing(ctx, HashToken("R"), u.ID, t0)
+	_, hash := NewToken()
+	_ = s.CreateDeviceToken(ctx, hash, d.ID, t0.Add(time.Hour))
+
+	if err := s.RevokeDevice(ctx, other.ID, d.ID, t0); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("another user revoked my device: %v", err)
+	}
+	if err := s.RevokeDevice(ctx, u.ID, d.ID, t0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DeviceForToken(ctx, hash, t0); !errors.Is(err, ErrNotFound) {
+		t.Fatal("revoked device's token still works")
+	}
+	if list, _ := s.ListDevices(ctx, u.ID); len(list) != 0 {
+		t.Fatalf("revoked device still listed: %+v", list)
+	}
+	if err := s.RevokeDevice(ctx, u.ID, d.ID, t0); !errors.Is(err, ErrNotFound) {
+		t.Fatal("double revoke should report not found")
 	}
 }

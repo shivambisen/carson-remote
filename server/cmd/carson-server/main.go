@@ -42,7 +42,7 @@ func run() error {
 		return fmt.Errorf("open database: %w", err)
 	}
 	defer st.Close()
-	go cleanup(ctx, st, log)
+	go cleanup(ctx, st, log, cfg.AuditRetention)
 
 	api := httpapi.New(cfg, st, log)
 	srv := &http.Server{
@@ -73,7 +73,7 @@ func run() error {
 }
 
 // cleanup periodically deletes expired sessions, logins, pairings and tokens.
-func cleanup(ctx context.Context, st *store.Store, log *slog.Logger) {
+func cleanup(ctx context.Context, st *store.Store, log *slog.Logger, auditRetention time.Duration) {
 	t := time.NewTicker(10 * time.Minute)
 	defer t.Stop()
 	for {
@@ -83,6 +83,9 @@ func cleanup(ctx context.Context, st *store.Store, log *slog.Logger) {
 		case <-t.C:
 			if err := st.DeleteExpired(ctx, time.Now()); err != nil {
 				log.Error("cleanup expired rows", "err", err)
+			}
+			if err := st.PruneAudit(ctx, time.Now().Add(-auditRetention)); err != nil {
+				log.Error("prune audit log", "err", err)
 			}
 		}
 	}

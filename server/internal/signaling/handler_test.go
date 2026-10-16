@@ -17,6 +17,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"carson/server/internal/audit"
 	"carson/server/internal/auth"
 	"carson/server/internal/devices"
 	"carson/server/internal/protocol"
@@ -26,9 +27,10 @@ import (
 )
 
 type env struct {
-	srv   *httptest.Server
-	store *store.Store
-	hub   *Hub
+	srv     *httptest.Server
+	store   *store.Store
+	hub     *Hub
+	handler *Handler
 }
 
 func newEnv(t *testing.T) *env {
@@ -52,13 +54,18 @@ func newEnvWithHeartbeat(t *testing.T, interval, timeout time.Duration) *env {
 	a := &auth.Service{Store: st, PublicURL: pub, Log: log, Now: time.Now, LoginLimiter: lim}
 	hub := NewHub()
 	d := &devices.Service{Store: st, Auth: a, Presence: hub, Log: log, Now: time.Now}
-	mux.Handle("GET /v1/ws", &Handler{
+	h := &Handler{
 		Hub: hub, Store: st, Auth: a, Devices: d, Log: log, Now: time.Now,
 		PingInterval: interval, PingTimeout: timeout,
-		ResumeWindow: 300 * time.Millisecond,
-		ICE:          &turn.Issuer{Secret: "test-secret", TURNURLs: []string{"turn:turn.test:3478?transport=udp"}, STUNURLs: []string{"stun:turn.test:3478"}},
-	})
-	return &env{srv: srv, store: st, hub: hub}
+		ResumeWindow:  300 * time.Millisecond,
+		ICE:           &turn.Issuer{Secret: "test-secret", TURNURLs: []string{"turn:turn.test:3478?transport=udp"}, STUNURLs: []string{"stun:turn.test:3478"}},
+		Audit:         &audit.Log{Store: st, Log: log, Now: time.Now},
+		ResumeLimiter: ratelimit.New(3, time.Minute, 3),
+		MessageRate:   50,
+		MessageBurst:  50,
+	}
+	mux.Handle("GET /v1/ws", h)
+	return &env{srv: srv, store: st, hub: hub, handler: h}
 }
 
 func (e *env) wsURL() string { return "ws" + strings.TrimPrefix(e.srv.URL, "http") + "/v1/ws" }

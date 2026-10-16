@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"carson/server/internal/audit"
 	"carson/server/internal/auth"
 	"carson/server/internal/config"
 	"carson/server/internal/devices"
@@ -39,15 +40,19 @@ func New(cfg config.Config, st *store.Store, log *slog.Logger) *Server {
 		providers["github"] = auth.NewGitHub(cfg.GitHub.ClientID, cfg.GitHub.ClientSecret)
 	}
 
+	auditLog := &audit.Log{Store: st, Log: log, Now: now}
 	authSvc := &auth.Service{
 		Store: st, Providers: providers, PublicURL: cfg.PublicURL, AllowedOrigins: cfg.AllowedOrigins,
 		Dev: cfg.Dev, TrustProxy: cfg.TrustProxy, Log: log, Now: now,
 		LoginLimiter: ratelimit.New(20, time.Minute, 20),
+		Audit:        auditLog,
 	}
 	hub := signaling.NewHub()
 	devSvc := &devices.Service{
 		Store: st, Auth: authSvc, Presence: hub, TrustProxy: cfg.TrustProxy, Log: log, Now: now,
+		Audit: auditLog,
 		Limits: devices.Limiters{
+			Revoke:     ratelimit.New(10, time.Minute, 10),
 			PairStart:  ratelimit.New(10, 10*time.Minute, 10),
 			PairCode:   ratelimit.New(10, time.Minute, 10),
 			PairPoll:   ratelimit.New(60, time.Minute, 30),
@@ -73,18 +78,32 @@ func New(cfg config.Config, st *store.Store, log *slog.Logger) *Server {
 	})
 	authSvc.Routes(mux)
 	devSvc.Routes(mux)
-	mux.Handle("GET /v1/ws", &signaling.Handler{
+	ws := &signaling.Handler{
 		Hub: hub, Store: st, Auth: authSvc, Devices: devSvc, Log: log, Now: now,
 		PingInterval: 15 * time.Second, PingTimeout: 30 * time.Second,
 		ICE:            &turn.Issuer{Secret: cfg.TURNSecret, TURNURLs: cfg.TURNURLs, STUNURLs: cfg.STUNURLs, TTL: cfg.TURNTTL},
 		TrustProxy:     cfg.TrustProxy,
 		SessionLimiter: ratelimit.New(10, time.Minute, 5),
-	})
+		UpgradeLimiter: ratelimit.New(30, time.Minute, 30),
+		ResumeLimiter:  ratelimit.New(10, time.Minute, 10),
+		Audit:          auditLog,
+	}
+	devSvc.OnRevoke = ws.RevokeDevice
+	mux.Handle("GET /v1/ws", ws)
 	if cfg.WebDir != "" {
 		mux.Handle("GET /", http.FileServer(http.Dir(cfg.WebDir)))
 	}
 
-	return &Server{Handler: logRequests(log, securityHeaders(mux)), Hub: hub}
+	// Coarse per-IP guard in front of everything; endpoint limits above are much tighter.
+	global := ratelimit.New(1200, time.Minute, 300)
+	limited := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !global.Allow(httpx.ClientIP(r, cfg.TrustProxy)) {
+			httpx.WriteError(w, http.StatusTooManyRequests, "rate_limited", "too many requests")
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
+	return &Server{Handler: logRequests(log, securityHeaders(limited)), Hub: hub}
 }
 
 func securityHeaders(next http.Handler) http.Handler {

@@ -36,10 +36,15 @@ type session struct {
 	viewerToken []byte // hashes of the parties' resume tokens
 	agentToken  []byte
 	expiry      *time.Timer // running while a side is detached
+
+	// For the audit log.
+	requestedAt time.Time
+	acceptedAt  time.Time
+	viewerInfo  protocol.ViewerInfo
 }
 
 // createSession registers a session between viewer and the device's current agent.
-func (h *Hub) createSession(viewer *client, deviceID string) (*session, string, string, error) {
+func (h *Hub) createSession(viewer *client, deviceID string, info protocol.ViewerInfo, now time.Time) (*session, string, string, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	agent := h.agents[deviceID]
@@ -59,6 +64,7 @@ func (h *Hub) createSession(viewer *client, deviceID string) (*session, string, 
 	s := &session{
 		id: store.NewID("ses"), userID: viewer.userID, deviceID: deviceID,
 		viewer: viewer, agent: agent, viewerToken: vHash, agentToken: aHash,
+		requestedAt: now, viewerInfo: info,
 	}
 	h.sessions[s.id] = s
 	viewer.sessions[s.id] = s
@@ -84,10 +90,31 @@ func (h *Hub) peers(s *session) (viewer, agent *client) {
 	return s.viewer, s.agent
 }
 
-func (h *Hub) markAccepted(s *session) {
+func (h *Hub) markAccepted(s *session, now time.Time) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	s.accepted = true
+	s.acceptedAt = now
+}
+
+// deviceSessions snapshots all sessions (attached or detached) for a device.
+func (h *Hub) deviceSessions(deviceID string) []*session {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var out []*session
+	for _, s := range h.sessions {
+		if s.deviceID == deviceID {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// agentFor returns the device's live agent connection, if any.
+func (h *Hub) agentFor(deviceID string) *client {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.agents[deviceID]
 }
 
 func (h *Hub) isAccepted(s *session) bool {
@@ -123,8 +150,14 @@ func (h *Hub) endLocked(s *session) bool {
 // detach unbinds c from all its sessions. Each session is ended after `window` unless the
 // side re-attaches; onExpire runs (outside the lock) for each session that expires.
 func (h *Hub) detach(c *client, window time.Duration, onExpire func(s *session, other *client)) {
+	var ended []*session
 	h.mu.Lock()
-	defer h.mu.Unlock()
+	defer func() {
+		h.mu.Unlock()
+		for _, s := range ended {
+			onExpire(s, nil) // both sides gone: audit it; nobody to notify
+		}
+	}()
 	for id, s := range c.sessions {
 		delete(c.sessions, id)
 		if s.viewer == c {
@@ -134,7 +167,9 @@ func (h *Hub) detach(c *client, window time.Duration, onExpire func(s *session, 
 			s.agent = nil
 		}
 		if s.viewer == nil && s.agent == nil {
-			h.endLocked(s) // nobody left to resume to
+			if h.endLocked(s) { // nobody left to resume to
+				ended = append(ended, s)
+			}
 			continue
 		}
 		if s.expiry != nil {
@@ -230,8 +265,61 @@ func (h *Handler) resumeWindow() time.Duration {
 	return DefaultResumeWindow
 }
 
+// auditSession records a session event with the viewer's IP and browser.
+func (h *Handler) auditSession(s *session, action, detail string) {
+	h.Audit.Record(store.AuditEvent{
+		UserID: s.userID, DeviceID: s.deviceID, SID: s.id, Action: action,
+		IP: s.viewerInfo.IP, UserAgent: s.viewerInfo.UserAgent, Detail: detail,
+	})
+}
+
+// finish ends s (once), audits it, and tells `notify` (if any) why.
+func (h *Handler) finish(s *session, by, reason string, notify *client) {
+	if !h.Hub.endSession(s) {
+		return
+	}
+	h.send(notify, protocol.TypeSessionEnd, s.id, "", protocol.SessionEnd{Reason: reason})
+	h.auditEnd(s, by, reason)
+}
+
+func (h *Handler) auditEnd(s *session, by, reason string) {
+	detail := "reason=" + reason + " by=" + by
+	if !s.acceptedAt.IsZero() {
+		detail += " duration=" + h.Now().Sub(s.acceptedAt).Round(time.Second).String()
+	}
+	h.auditSession(s, store.AuditSessionEnded, detail)
+	h.Log.Info("session ended", "sid", s.id, "by", by, "reason", reason)
+}
+
+// RevokeDevice disconnects a revoked device's agent and ends its sessions immediately.
+func (h *Handler) RevokeDevice(deviceID string) {
+	for _, s := range h.Hub.deviceSessions(deviceID) {
+		viewer, _ := h.Hub.peers(s)
+		h.finish(s, "owner", "device_revoked", viewer)
+	}
+	if c := h.Hub.agentFor(deviceID); c != nil {
+		c.close("revoked")
+	}
+}
+
+// reasonOf extracts the "reason" from a session.end / session.reject body.
+func reasonOf(body json.RawMessage) string {
+	var r struct {
+		Reason string `json:"reason"`
+	}
+	_ = json.Unmarshal(body, &r)
+	if r.Reason == "" || len(r.Reason) > 40 {
+		return "unspecified"
+	}
+	return r.Reason
+}
+
 // handleResume processes session.resume from either side.
 func (h *Handler) handleResume(c *client, env protocol.Envelope) {
+	if h.ResumeLimiter != nil && !h.ResumeLimiter.Allow(c.userID+"/"+c.deviceID) {
+		h.send(c, protocol.TypeSessionResume, env.SID, env.ID, protocol.SessionResume{Resumed: false, Reason: protocol.ReasonRateLimited})
+		return
+	}
 	var req protocol.SessionResume
 	_ = json.Unmarshal(env.Body, &req)
 	s, err := h.Hub.resume(env.SID, c, req.Token)
@@ -240,7 +328,9 @@ func (h *Handler) handleResume(c *client, env protocol.Envelope) {
 		h.send(c, protocol.TypeSessionResume, env.SID, env.ID, protocol.SessionResume{Resumed: false, Reason: protocol.ReasonResumeFailed})
 		return
 	}
-	h.Log.Info("session resumed", "sid", s.id, "side", map[bool]string{true: "agent", false: "viewer"}[c.deviceID != ""])
+	side := map[bool]string{true: "agent", false: "viewer"}[c.deviceID != ""]
+	h.Log.Info("session resumed", "sid", s.id, "side", side)
+	h.auditSession(s, store.AuditSessionResumed, "side="+side)
 	h.send(c, protocol.TypeSessionResume, s.id, env.ID, protocol.SessionResume{Resumed: true})
 }
 
@@ -263,8 +353,7 @@ func (h *Handler) handleViewerSession(c *client, viewer protocol.ViewerInfo, env
 		}
 		h.forward(agent, env)
 		if env.Type == protocol.TypeSessionEnd {
-			h.Hub.endSession(s)
-			h.Log.Info("session ended", "sid", s.id, "by", "viewer")
+			h.finish(s, "viewer", reasonOf(env.Body), nil)
 		}
 	default:
 		h.Log.Debug("viewer message ignored", "type", env.Type)
@@ -272,8 +361,13 @@ func (h *Handler) handleViewerSession(c *client, viewer protocol.ViewerInfo, env
 }
 
 func (h *Handler) startSession(c *client, viewer protocol.ViewerInfo, env protocol.Envelope) {
+	var ownedDevice string // only audited if it is the requester's own device
 	reject := func(reason, msg string) {
 		h.send(c, protocol.TypeSessionReject, "", env.ID, protocol.SessionReject{Reason: reason, Message: msg})
+		h.Audit.Record(store.AuditEvent{
+			UserID: c.userID, DeviceID: ownedDevice, Action: store.AuditSessionRejected,
+			IP: viewer.IP, UserAgent: viewer.UserAgent, Detail: "reason=" + reason + " by=server",
+		})
 	}
 	if h.SessionLimiter != nil && !h.SessionLimiter.Allow(c.userID) {
 		reject(protocol.ReasonRateLimited, "too many connection attempts; wait a minute")
@@ -292,7 +386,8 @@ func (h *Handler) startSession(c *client, viewer protocol.ViewerInfo, env protoc
 		reject(protocol.ReasonUnknownDevice, "no such device on your account")
 		return
 	}
-	s, viewerToken, agentToken, err := h.Hub.createSession(c, d.ID)
+	ownedDevice = d.ID
+	s, viewerToken, agentToken, err := h.Hub.createSession(c, d.ID, viewer, h.Now())
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		reject(protocol.ReasonDeviceOffline, "the device is offline")
@@ -308,6 +403,7 @@ func (h *Handler) startSession(c *client, viewer protocol.ViewerInfo, env protoc
 		return
 	}
 	h.Log.Info("session requested", "sid", s.id, "device_id", d.ID, "user_id", c.userID, "viewer_ip", viewer.IP)
+	h.auditSession(s, store.AuditSessionRequest, "")
 	ice := h.iceServers(s.id)
 	_, agent := h.Hub.peers(s)
 	// The viewer learns the sid from turn.creds (correlated by its request ID).
@@ -333,12 +429,17 @@ func (h *Handler) handleAgentSession(c *client, env protocol.Envelope) {
 	}
 	switch env.Type {
 	case protocol.TypeSessionAccept:
-		h.Hub.markAccepted(s)
+		h.Hub.markAccepted(s, h.Now())
+		h.auditSession(s, store.AuditSessionAccepted, "")
 		h.forward(viewer, env)
-	case protocol.TypeSessionReject, protocol.TypeSessionEnd:
+	case protocol.TypeSessionReject:
 		h.forward(viewer, env)
-		h.Hub.endSession(s)
-		h.Log.Info("session ended", "sid", s.id, "by", "agent", "type", env.Type)
+		if h.Hub.endSession(s) {
+			h.auditSession(s, store.AuditSessionRejected, "reason="+reasonOf(env.Body)+" by=host")
+		}
+	case protocol.TypeSessionEnd:
+		h.forward(viewer, env)
+		h.finish(s, "host", reasonOf(env.Body), nil)
 	case protocol.TypeSDPOffer:
 		if !h.Hub.isAccepted(s) {
 			h.Log.Warn("offer before accept dropped", "sid", s.id)
@@ -356,6 +457,6 @@ func (h *Handler) handleAgentSession(c *client, env protocol.Envelope) {
 func (h *Handler) detachAll(c *client) {
 	h.Hub.detach(c, h.resumeWindow(), func(s *session, other *client) {
 		h.send(other, protocol.TypeSessionEnd, s.id, "", protocol.SessionEnd{Reason: protocol.ReasonPeerDisconnected})
-		h.Log.Info("session ended", "sid", s.id, "by", "resume timeout")
+		h.auditEnd(s, "timeout", protocol.ReasonPeerDisconnected)
 	})
 }

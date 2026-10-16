@@ -22,6 +22,8 @@ type Config struct {
 	STUNURLs   []string
 	// TURNTTL bounds TURN credential lifetime (0 = turn.DefaultTTL).
 	TURNTTL time.Duration
+	// AuditRetention is how long audit events (with IPs: personal data) are kept.
+	AuditRetention time.Duration
 
 	// AllowedOrigins are browser origins (besides PublicURL) allowed to make
 	// cookie-authenticated requests, e.g. the Vite dev server.
@@ -82,6 +84,14 @@ func Load(getenv func(string) string) (Config, error) {
 			errs = append(errs, fmt.Errorf("CARSON_TURN_TTL: want a duration between 1m and 48h, got %q", v))
 		}
 		cfg.TURNTTL = d
+	}
+	cfg.AuditRetention = 90 * 24 * time.Hour
+	if v := get("CARSON_AUDIT_RETENTION", ""); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d < time.Hour {
+			errs = append(errs, fmt.Errorf("CARSON_AUDIT_RETENTION: want a duration of at least 1h (e.g. 2160h), got %q", v))
+		}
+		cfg.AuditRetention = d
 	}
 	parseBool("CARSON_DEV", &cfg.Dev)
 	parseBool("CARSON_TRUST_PROXY", &cfg.TrustProxy)

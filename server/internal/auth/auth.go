@@ -15,6 +15,7 @@ import (
 
 	"golang.org/x/oauth2"
 
+	"carson/server/internal/audit"
 	"carson/server/internal/httpx"
 	"carson/server/internal/ratelimit"
 	"carson/server/internal/store"
@@ -39,6 +40,7 @@ type Service struct {
 	Log            *slog.Logger
 	Now            func() time.Time
 	LoginLimiter   *ratelimit.Limiter
+	Audit          *audit.Log
 }
 
 type ctxKey struct{}
@@ -154,6 +156,10 @@ func (s *Service) handleCallback(w http.ResponseWriter, r *http.Request) {
 	fail := func(code string) {
 		http.Redirect(w, r, "/#/login?error="+url.QueryEscape(code), http.StatusFound)
 	}
+	if !s.LoginLimiter.Allow(httpx.ClientIP(r, s.TrustProxy)) {
+		fail("rate_limited")
+		return
+	}
 	q := r.URL.Query()
 	name := r.PathValue("provider")
 	p, ok := s.Providers[name]
@@ -199,6 +205,10 @@ func (s *Service) handleDevLogin(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusForbidden, "bad_origin", "request origin not allowed")
 		return
 	}
+	if !s.LoginLimiter.Allow(httpx.ClientIP(r, s.TrustProxy)) {
+		httpx.WriteError(w, http.StatusTooManyRequests, "rate_limited", "too many login attempts")
+		return
+	}
 	var body struct {
 		Email string `json:"email"`
 	}
@@ -237,6 +247,7 @@ func (s *Service) startSession(w http.ResponseWriter, r *http.Request, ident sto
 		HttpOnly: true, Secure: s.PublicURL.Scheme == "https", SameSite: http.SameSiteLaxMode,
 	})
 	s.Log.Info("signed in", "user_id", u.ID, "provider", ident.Provider)
+	s.Audit.Record(store.AuditEvent{UserID: u.ID, Action: store.AuditSignedIn, IP: httpx.ClientIP(r, s.TrustProxy), UserAgent: r.UserAgent(), Detail: "via " + ident.Provider})
 	return nil
 }
 

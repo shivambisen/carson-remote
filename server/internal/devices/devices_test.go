@@ -15,10 +15,12 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sync"
 	"testing"
 	"time"
 
+	"carson/server/internal/audit"
 	"carson/server/internal/auth"
 	"carson/server/internal/ratelimit"
 	"carson/server/internal/store"
@@ -358,5 +360,74 @@ func TestAuthMessageMatchesSharedFixture(t *testing.T) {
 	}
 	if b64.EncodeToString(ed25519.Sign(key, []byte(v.Message))) != v.Signature {
 		t.Fatal("signature mismatch")
+	}
+}
+
+func TestRevokeEndpointIsOwnerOnlyAndAudited(t *testing.T) {
+	e := newEnv(t)
+	e.svc.Audit = &audit.Log{Store: e.svc.Store, Log: e.svc.Log, Now: e.clock.Now}
+	var revoked []string
+	e.svc.OnRevoke = func(id string) { revoked = append(revoked, id) }
+	ana, bo := e.user(t, "ana@x.com"), e.user(t, "bo@x.com")
+	key, anaDev := e.enroll(t, ana)
+
+	if code, _ := e.call(t, bo, "/v1/devices/"+anaDev+"/revoke", map[string]string{}, nil); code != http.StatusNotFound {
+		t.Fatalf("bo revoking ana's device = %d", code)
+	}
+	if len(revoked) != 0 {
+		t.Fatal("hub notified for a refused revoke")
+	}
+	if code, body := e.call(t, ana, "/v1/devices/"+anaDev+"/revoke", map[string]string{}, nil); code != http.StatusNoContent {
+		t.Fatalf("revoke = %d %s", code, body)
+	}
+	if len(revoked) != 1 || revoked[0] != anaDev {
+		t.Fatalf("hub not told to disconnect: %v", revoked)
+	}
+	if code, _ := e.token(t, key, anaDev); code != http.StatusUnauthorized {
+		t.Fatalf("revoked device can still authenticate: %d", code)
+	}
+
+	resp, err := ana.Get(e.srv.URL + "/v1/audit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out struct{ Events []store.AuditEvent }
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	actions := []string{}
+	for _, ev := range out.Events {
+		actions = append(actions, ev.Action)
+	}
+	if len(actions) < 2 || actions[0] != store.AuditDeviceRevoked || !slices.Contains(actions, store.AuditDevicePaired) {
+		t.Fatalf("ana's audit = %v", actions)
+	}
+	resp2, err := bo.Get(e.srv.URL + "/v1/audit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp2.Body.Close()
+	var boOut struct{ Events []store.AuditEvent }
+	_ = json.NewDecoder(resp2.Body).Decode(&boOut)
+	for _, ev := range boOut.Events {
+		if ev.DeviceID == anaDev {
+			t.Fatalf("bo can see ana's events: %+v", ev)
+		}
+	}
+}
+
+func TestDeviceListIncludesPublicKey(t *testing.T) {
+	e := newEnv(t)
+	ana := e.user(t, "ana@x.com")
+	key, id := e.enroll(t, ana)
+	resp, err := ana.Get(e.srv.URL + "/v1/devices")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out struct{ Devices []DeviceView }
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	want := b64.EncodeToString(key.Public().(ed25519.PublicKey))
+	if len(out.Devices) != 1 || out.Devices[0].ID != id || out.Devices[0].PublicKey != want {
+		t.Fatalf("devices = %+v", out.Devices)
 	}
 }
