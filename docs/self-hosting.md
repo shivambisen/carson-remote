@@ -16,7 +16,7 @@ encrypted traffic only when a direct connection is impossible. A free cloud VM i
 5. On the VM:
 
    ```bash
-   git clone https://github.com/OWNER/carson.git && cd carson
+   git clone https://github.com/shivambisen/carson-remote.git && cd carson
    sudo bash deploy/install-server.sh --domain mycarson.duckdns.org \
         --github-id YOUR_CLIENT_ID --github-secret YOUR_CLIENT_SECRET
    ```

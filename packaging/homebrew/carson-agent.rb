@@ -3,16 +3,16 @@
 # The release workflow prints the URLs and SHA-256 values to paste below.
 class CarsonAgent < Formula
   desc "Free remote desktop: view and control your own computers from your browser"
-  homepage "https://github.com/OWNER/carson"
+  homepage "https://github.com/shivambisen/carson-remote"
   version "0.1.0"
   license "Apache-2.0"
 
   on_arm do
-    url "https://github.com/OWNER/carson/releases/download/v#{version}/carson-agent-#{version}-macos-arm64.tar.gz"
+    url "https://github.com/shivambisen/carson-remote/releases/download/v#{version}/carson-agent-#{version}-macos-arm64.tar.gz"
     sha256 "REPLACE_WITH_ARM64_SHA256"
   end
   on_intel do
-    url "https://github.com/OWNER/carson/releases/download/v#{version}/carson-agent-#{version}-macos-x86_64.tar.gz"
+    url "https://github.com/shivambisen/carson-remote/releases/download/v#{version}/carson-agent-#{version}-macos-x86_64.tar.gz"
     sha256 "REPLACE_WITH_X86_64_SHA256"
   end
 

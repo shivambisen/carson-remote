@@ -11,7 +11,7 @@
 set -euo pipefail
 
 DOMAIN="" GITHUB_ID="" GITHUB_SECRET="" GOOGLE_ID="" GOOGLE_SECRET=""
-REPO="${CARSON_REPO:-https://github.com/OWNER/carson.git}" DIR=/opt/carson
+REPO="${CARSON_REPO:-https://github.com/shivambisen/carson-remote.git}" DIR=/opt/carson
 while [ $# -gt 0 ]; do
   case "$1" in
     --domain) DOMAIN=$2; shift 2 ;;

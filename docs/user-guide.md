@@ -9,7 +9,7 @@ each computer you want to reach runs `carson-agent`.
 **Mac (Homebrew):**
 
 ```bash
-brew install OWNER/carson/carson-agent
+brew install shivambisen/carson-remote/carson-agent
 carson-agent setup --server https://YOUR-CARSON-SERVER
 ```
 
