@@ -24,7 +24,9 @@ SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayName=glenley
 UninstallDisplayIcon={app}\glenley.exe
-CloseApplications=force
+; glenley is stopped by [Code] below; Windows' Restart Manager can wait forever on a copy that
+; isn't responding, so don't use it.
+CloseApplications=no
 SetupIconFile=..\icons\glenley.ico
 
 [Files]
@@ -41,14 +43,15 @@ Filename: "{app}\glenley.exe"; Description: "Start glenley"; Flags: nowait posti
 
 [UninstallRun]
 Filename: "{app}\glenley-agent.exe"; Parameters: "service uninstall"; Flags: runhidden; RunOnceId: "LoginItem"
-Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM glenley.exe"; Flags: runhidden; RunOnceId: "StopApp"
+Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM glenley.exe /IM glenley-agent.exe"; Flags: runhidden; RunOnceId: "StopApp"
 
 [Code]
-// Stop a running glenley before files are replaced (updates).
+// Stop every running glenley (app and command-line agent) before files are replaced.
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   Code: Integer;
 begin
-  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM glenley.exe', '', SW_HIDE, ewWaitUntilTerminated, Code);
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /T /IM glenley.exe /IM glenley-agent.exe', '', SW_HIDE, ewWaitUntilTerminated, Code);
+  Sleep(500);
   Result := '';
 end;
