@@ -1,0 +1,42 @@
+@import "tailwindcss";
+
+/* Warm neutrals, ink text, one orange accent; serif display type over a clean sans. */
+@theme {
+  --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-serif: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --font-mono: "Geist Mono", ui-monospace, monospace;
+  --color-paper: #f5f5f4;
+  --color-ink: #0e1229;
+  --color-muted: #6b7280;
+  --color-faint: #9aa1aa;
+  --color-line: #e7e5e4;
+  --color-accent: #f97316;
+  --color-accent-deep: #c2410c;
+  --color-screen: #14161c;
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+  body {
+    @apply bg-paper font-sans text-ink antialiased;
+  }
+}
+
+@utility dots {
+  background-image: radial-gradient(circle, rgb(14 18 41 / 0.13) 1px, transparent 1.3px);
+  background-size: 22px 22px;
+}
+
+@utility soft {
+  box-shadow:
+    0 1px 2px rgb(14 18 41 / 0.06),
+    0 8px 24px -6px rgb(14 18 41 / 0.12);
+}
+
+@utility chip-shadow {
+  box-shadow:
+    -2px -2px 6px rgb(255 255 255 / 0.7),
+    2px 3px 8px rgb(14 18 41 / 0.08);
+}

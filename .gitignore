@@ -21,3 +21,5 @@ node_modules/
 
 # Local Claude Code preview config
 .claude/
+/site/node_modules/
+/site/dist/

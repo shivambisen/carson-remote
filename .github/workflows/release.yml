@@ -100,8 +100,16 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with: { path: dist, merge-multiple: true }
+      - name: Version-free copies for direct download links
+        # The website links to …/releases/latest/download/<name>, which always serves the
+        # newest (non-pre-)release, so these names never change between versions.
+        run: |
+          cd dist
+          cp carson-setup-*-windows-x86_64.exe carson-setup-windows-x86_64.exe
+          for a in arm64 x86_64; do cp carson-*-macos-$a.zip carson-macos-$a.zip; done
+          ls -la
       - name: Checksums (paste the macOS ones into the Homebrew formula)
-        run: cd dist && cat *.sha256 server-SHA256SUMS | tee SHA256SUMS
+        run: cd dist && sha256sum carson-setup-windows-x86_64.exe carson-macos-*.zip > direct-SHA256SUMS && cat *.sha256 server-SHA256SUMS direct-SHA256SUMS | tee SHA256SUMS
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*
