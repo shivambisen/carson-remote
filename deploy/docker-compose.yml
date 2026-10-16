@@ -23,6 +23,8 @@ services:
       CARSON_GOOGLE_CLIENT_SECRET: ${CARSON_GOOGLE_CLIENT_SECRET:-}
       CARSON_GITHUB_CLIENT_ID: ${CARSON_GITHUB_CLIENT_ID:-}
       CARSON_GITHUB_CLIENT_SECRET: ${CARSON_GITHUB_CLIENT_SECRET:-}
+      CARSON_TURN_TTL: ${CARSON_TURN_TTL:-6h}
+      CARSON_AUDIT_RETENTION: ${CARSON_AUDIT_RETENTION:-2160h}
     ports:
       - "8080:8080"
     volumes:
@@ -31,17 +33,20 @@ services:
 
   coturn:
     image: coturn/coturn:4.7.0
-    # Secret is passed as a flag so it never lives in a committed config file.
+    # The secret comes from the environment so it never lives in a committed file.
+    # CARSON_TURN_EXTERNAL_IP ("public/private", e.g. on Oracle Cloud) is needed behind NAT.
+    entrypoint: ["sh", "-c"]
     command:
-      - -c
-      - /etc/coturn/turnserver.conf
-      - --static-auth-secret=${CARSON_TURN_SECRET:?set CARSON_TURN_SECRET in .env}
+      - exec turnserver -c /etc/coturn/turnserver.conf --static-auth-secret="$$CARSON_TURN_SECRET" $${CARSON_TURN_EXTERNAL_IP:+--external-ip=$$CARSON_TURN_EXTERNAL_IP}
+    environment:
+      CARSON_TURN_SECRET: ${CARSON_TURN_SECRET:?set CARSON_TURN_SECRET in .env}
+      CARSON_TURN_EXTERNAL_IP: ${CARSON_TURN_EXTERNAL_IP:-}
     volumes:
       - ./coturn/turnserver.conf:/etc/coturn/turnserver.conf:ro
     ports:
       - "3478:3478/udp"
       - "3478:3478/tcp"
-      - "49160-49200:49160-49200/udp"
+      - "49160-49400:49160-49400/udp"
     restart: unless-stopped
 
   caddy:
