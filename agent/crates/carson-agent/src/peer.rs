@@ -59,6 +59,14 @@ pub enum SessionEvent {
     RemoteEnd,
     /// The viewer may see and control the screen (no PIN needed, or PIN accepted).
     Authorized,
+    /// The media path stopped working (may recover by itself, or after an ICE restart).
+    MediaDisconnected,
+    /// ICE gave up on the current candidates.
+    MediaFailed,
+    /// The viewer asks for an ICE restart.
+    RestartIce,
+    /// Our signaling connection came back (often after a network change).
+    SignalingResumed,
 }
 
 /// Everything that defines one session.
@@ -140,9 +148,9 @@ impl PeerConnectionEventHandler for Handler {
         tracing::info!(sid = %self.sid, %state, "peer connection state");
         let event = match state {
             RTCPeerConnectionState::Connected => SessionEvent::Connected,
-            RTCPeerConnectionState::Failed => SessionEvent::Failed("connection_failed"),
+            RTCPeerConnectionState::Disconnected => SessionEvent::MediaDisconnected,
+            RTCPeerConnectionState::Failed => SessionEvent::MediaFailed,
             RTCPeerConnectionState::Closed => SessionEvent::Failed("closed"),
-            // `Disconnected` can recover on its own; ICE restart arrives in M5.
             _ => return,
         };
         let _ = self.events.send(event);
@@ -151,6 +159,27 @@ impl PeerConnectionEventHandler for Handler {
 
 /// How long the viewer has to complete the WebRTC handshake.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+/// A disconnected path gets this long to recover by itself before we restart ICE.
+const ICE_RESTART_DELAY: Duration = Duration::from_secs(2);
+/// Minimum spacing between ICE restarts.
+const ICE_RESTART_MIN_INTERVAL: Duration = Duration::from_secs(2);
+/// A session whose media path stays down this long is ended.
+const MEDIA_LOSS_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Restarts ICE: new credentials and candidates, renegotiated with a fresh offer.
+/// Media, DTLS and data channels continue on the new path.
+async fn restart_ice(pc: &Arc<dyn PeerConnection>, out: &Outbox, sid: &str) -> Result<bool> {
+    if pc.pending_local_description().await.is_some() {
+        tracing::debug!(sid, "offer already pending; skipping ICE restart");
+        return Ok(false);
+    }
+    pc.restart_ice().await?;
+    let offer = pc.create_offer(None).await?;
+    pc.set_local_description(offer.clone()).await?;
+    send(out, MessageType::SdpOffer, sid, &offer);
+    tracing::info!(sid, "ICE restart offered");
+    Ok(true)
+}
 /// How long the viewer has to enter the unattended-access PIN once connected.
 const PIN_ENTRY_TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -253,6 +282,15 @@ async fn session_inner(
     let (mut connected, mut authorized) = (false, false);
     let deadline = tokio::time::sleep(CONNECT_TIMEOUT);
     tokio::pin!(deadline);
+    // Media recovery: when the path drops, restart ICE after a short grace period and give
+    // up if nothing works for MEDIA_LOSS_TIMEOUT.
+    let mut media_down = false;
+    let mut restart_pending = false;
+    let mut last_restart: Option<Instant> = None;
+    let restart_at = tokio::time::sleep(Duration::from_secs(3600));
+    tokio::pin!(restart_at);
+    let lost_at = tokio::time::sleep(Duration::from_secs(3600));
+    tokio::pin!(lost_at);
 
     let reason = loop {
         let event = tokio::select! {
@@ -264,9 +302,83 @@ async fn session_inner(
                 tracing::info!(sid, "disconnected from the host's banner");
                 break "host_disconnected";
             }
+            _ = &mut restart_at, if restart_pending => Some(SessionEvent::RestartIce),
+            _ = &mut lost_at, if media_down => {
+                tracing::warn!(sid, "media path did not recover");
+                break "connection_lost";
+            }
         };
+        let event = match event {
+            Some(SessionEvent::MediaDisconnected) if connected => {
+                if !media_down {
+                    media_down = true;
+                    lost_at
+                        .as_mut()
+                        .reset(tokio::time::Instant::now() + MEDIA_LOSS_TIMEOUT);
+                    tracing::warn!(sid, "media path disconnected; waiting before ICE restart");
+                }
+                restart_pending = true;
+                restart_at
+                    .as_mut()
+                    .reset(tokio::time::Instant::now() + ICE_RESTART_DELAY);
+                continue;
+            }
+            Some(SessionEvent::MediaDisconnected) => continue, // still connecting
+            // A signaling reconnect often means the network changed: restart if media is down.
+            Some(SessionEvent::SignalingResumed) if media_down => Some(SessionEvent::RestartIce),
+            Some(SessionEvent::SignalingResumed) => continue,
+            Some(SessionEvent::MediaFailed) if !connected => break "connection_failed",
+            Some(SessionEvent::MediaFailed) => {
+                if !media_down {
+                    media_down = true;
+                    lost_at
+                        .as_mut()
+                        .reset(tokio::time::Instant::now() + MEDIA_LOSS_TIMEOUT);
+                }
+                Some(SessionEvent::RestartIce)
+            }
+            other => other,
+        };
+        if let Some(SessionEvent::RestartIce) = event {
+            restart_pending = false;
+            let too_soon = last_restart.is_some_and(|t| t.elapsed() < ICE_RESTART_MIN_INTERVAL);
+            if !connected {
+                continue; // nothing to restart yet
+            }
+            if too_soon {
+                restart_pending = true;
+                restart_at
+                    .as_mut()
+                    .reset(tokio::time::Instant::now() + ICE_RESTART_MIN_INTERVAL);
+                continue;
+            }
+            match restart_ice(&pc, out, sid).await {
+                Ok(true) => last_restart = Some(Instant::now()),
+                Ok(false) => {}
+                Err(e) => tracing::warn!(sid, error = %e, "ICE restart failed"),
+            }
+            continue;
+        }
+        if let Some(SessionEvent::Connected) = event
+            && connected
+        {
+            if media_down {
+                tracing::info!(sid, "media path recovered");
+                media_down = false;
+                restart_pending = false;
+                ctl.keyframe.store(true, Ordering::Relaxed); // repaint immediately
+            }
+            continue;
+        }
         match event {
             None | Some(SessionEvent::RemoteEnd) => break "remote_end",
+            // Handled by the media-recovery block above.
+            Some(
+                SessionEvent::MediaDisconnected
+                | SessionEvent::MediaFailed
+                | SessionEvent::RestartIce
+                | SessionEvent::SignalingResumed,
+            ) => {}
             Some(SessionEvent::Failed(reason)) => break reason,
             Some(SessionEvent::Answer(answer)) => pc
                 .set_remote_description(*answer)
@@ -847,6 +959,97 @@ mod tests {
             !recorded.lock().unwrap().iter().any(|e| e.contains("KeyX")),
             "pre-PIN input leaked"
         );
+
+        ev_tx.send(SessionEvent::RemoteEnd).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), session)
+            .await
+            .expect("session did not stop")
+            .unwrap();
+        let _ = viewer.close().await;
+    }
+
+    fn ice_ufrag(sdp: &str) -> String {
+        sdp.lines()
+            .find_map(|l| l.strip_prefix("a=ice-ufrag:"))
+            .expect("ice-ufrag in SDP")
+            .trim()
+            .to_owned()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn ice_restart_renegotiates_and_keeps_streaming() {
+        let media = MediaOptions {
+            source: Source::TestPattern,
+            ..Default::default()
+        };
+        let (out_tx, mut out_rx) = mpsc::unbounded_channel::<Envelope>();
+        let (ev_tx, ev_rx) = mpsc::unbounded_channel();
+        let capturer = crate::media::open_source(&media).unwrap();
+        let cfg = SessionConfig {
+            sid: "ses_restart".into(),
+            ice_servers: vec![],
+            media,
+            gate: None,
+            banner: None,
+        };
+        let session = tokio::spawn(run_session(cfg, capturer, out_tx, ev_tx.clone(), ev_rx));
+
+        let (cand_tx, mut cand_rx) = mpsc::unbounded_channel();
+        let (dc_tx, _dc_rx) = mpsc::unbounded_channel();
+        let frames = Arc::new(AtomicUsize::new(0));
+        let viewer = build_peer(
+            vec![],
+            Arc::new(ViewerHandler {
+                candidates: cand_tx,
+                frames: Arc::clone(&frames),
+                packets: Arc::default(),
+                channels: dc_tx,
+            }),
+        )
+        .await
+        .unwrap();
+        relay_until(
+            &mut out_rx,
+            &mut cand_rx,
+            &viewer,
+            &ev_tx,
+            || frames.load(Ordering::Relaxed) >= 10,
+            "first video",
+        )
+        .await;
+        let first_ufrag = ice_ufrag(&viewer.remote_description().await.unwrap().sdp);
+
+        for (n, trigger) in [SessionEvent::RestartIce, SessionEvent::MediaFailed]
+            .into_iter()
+            .enumerate()
+        {
+            tokio::time::sleep(ICE_RESTART_MIN_INTERVAL).await;
+            ev_tx.send(trigger).unwrap();
+            let before = frames.load(Ordering::Relaxed);
+            let viewer_ref = &viewer;
+            let mut renegotiated = false;
+            relay_until(
+                &mut out_rx,
+                &mut cand_rx,
+                &viewer,
+                &ev_tx,
+                || {
+                    // relay_until applies the restart offer; detect it by the changed ufrag.
+                    renegotiated = renegotiated
+                        || futures_util::FutureExt::now_or_never(viewer_ref.remote_description())
+                            .flatten()
+                            .is_some_and(|d| ice_ufrag(&d.sdp) != first_ufrag);
+                    renegotiated && frames.load(Ordering::Relaxed) >= before + 15
+                },
+                "video after ICE restart",
+            )
+            .await;
+            assert!(
+                renegotiated,
+                "restart {n} did not renegotiate with fresh ICE credentials"
+            );
+        }
+        assert!(!session.is_finished(), "session must survive ICE restarts");
 
         ev_tx.send(SessionEvent::RemoteEnd).unwrap();
         tokio::time::timeout(Duration::from_secs(5), session)

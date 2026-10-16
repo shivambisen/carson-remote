@@ -186,7 +186,11 @@ impl Agent {
         match env.message_type() {
             Some(MessageType::HelloOk) => match serde_json::from_value::<AgentHelloOk>(env.body) {
                 Ok(ok) => {
-                    tracing::info!(device_id = %ok.device_id, heartbeat_s = ok.heartbeat_interval_s, "online")
+                    tracing::info!(device_id = %ok.device_id, heartbeat_s = ok.heartbeat_interval_s, "online");
+                    self.sessions
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .on_reconnected();
                 }
                 Err(e) => tracing::warn!(error = %e, "bad hello.ok"),
             },

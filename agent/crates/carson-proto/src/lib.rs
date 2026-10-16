@@ -130,6 +130,9 @@ pub struct IceServer {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TurnCreds {
     pub ice_servers: Vec<IceServer>,
+    /// Lets this agent re-attach to the session after a signaling drop.
+    #[serde(default)]
+    pub resume_token: String,
 }
 
 /// Who is asking to connect (body of `session.request` sent to the agent).

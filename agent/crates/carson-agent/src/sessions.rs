@@ -24,6 +24,8 @@ pub struct Sessions {
     pins: Arc<Mutex<PinGuard>>,
     /// ICE servers announced via `turn.creds`, keyed by session, until the request arrives.
     pending_ice: HashMap<String, Vec<RTCIceServer>>,
+    /// Resume tokens (from `turn.creds`), to re-attach sessions after a signaling reconnect.
+    resume_tokens: HashMap<String, String>,
     active: HashMap<String, mpsc::UnboundedSender<SessionEvent>>,
 }
 
@@ -35,6 +37,7 @@ impl Sessions {
             policy,
             pins: Arc::default(),
             pending_ice: HashMap::new(),
+            resume_tokens: HashMap::new(),
             active: HashMap::new(),
         }
     }
@@ -48,7 +51,26 @@ impl Sessions {
                 | MessageType::SdpAnswer
                 | MessageType::IceCandidate
                 | MessageType::SessionEnd
+                | MessageType::SessionIceRestart
+                | MessageType::SessionResume
         )
+    }
+
+    /// After the signaling connection comes back: re-attach every running session.
+    pub fn on_reconnected(&mut self) {
+        self.active.retain(|_, tx| !tx.is_closed());
+        self.resume_tokens
+            .retain(|sid, _| self.active.contains_key(sid));
+        for (sid, token) in &self.resume_tokens {
+            tracing::info!(sid = %sid, "resuming session after signaling reconnect");
+            send(
+                &self.out,
+                MessageType::SessionResume,
+                sid,
+                serde_json::json!({ "token": token }),
+            );
+            self.dispatch(sid, SessionEvent::SignalingResumed);
+        }
     }
 
     pub fn handle(&mut self, env: Envelope) {
@@ -69,11 +91,25 @@ impl Sessions {
                             credential: s.credential,
                         })
                         .collect();
+                    if !creds.resume_token.is_empty() {
+                        self.resume_tokens.insert(sid.clone(), creds.resume_token);
+                    }
                     self.pending_ice.insert(sid, servers);
                 }
                 Err(e) => tracing::warn!(error = %e, "bad turn.creds"),
             },
             MessageType::SessionRequest => self.start(sid, env.body),
+            MessageType::SessionIceRestart => self.dispatch(&sid, SessionEvent::RestartIce),
+            MessageType::SessionResume => {
+                let resumed =
+                    env.body.get("resumed").and_then(serde_json::Value::as_bool) == Some(true);
+                if !resumed {
+                    // The server no longer knows this session: end it locally.
+                    tracing::warn!(sid = %sid, "session could not be resumed");
+                    self.dispatch(&sid, SessionEvent::RemoteEnd);
+                    self.active.remove(&sid);
+                }
+            }
             MessageType::SdpAnswer => {
                 match serde_json::from_value::<RTCSessionDescription>(env.body) {
                     Ok(answer) => self.dispatch(&sid, SessionEvent::Answer(Box::new(answer))),
@@ -287,6 +323,50 @@ fn rejection_for(decision: &Consent) -> Option<(&'static str, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn env(kind: MessageType, sid: &str, body: serde_json::Value) -> Envelope {
+        let mut e = Envelope::new(kind, body).unwrap();
+        e.sid = Some(sid.into());
+        e
+    }
+
+    #[test]
+    fn reconnect_resumes_running_sessions_and_drops_refused_ones() {
+        let (out, mut out_rx) = mpsc::unbounded_channel();
+        let mut sessions = Sessions::new(out, MediaOptions::default(), AccessPolicy::Attended);
+        sessions.handle(env(
+            MessageType::TurnCreds,
+            "ses_a",
+            serde_json::json!({"ice_servers": [], "resume_token": "tok-a"}),
+        ));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        sessions.active.insert("ses_a".into(), tx); // as if start() had run
+
+        sessions.on_reconnected();
+        let resume = out_rx.try_recv().expect("session.resume sent");
+        assert_eq!(resume.message_type(), Some(MessageType::SessionResume));
+        assert_eq!(resume.sid.as_deref(), Some("ses_a"));
+        assert_eq!(resume.body["token"], "tok-a");
+        assert!(matches!(rx.try_recv(), Ok(SessionEvent::SignalingResumed)));
+
+        sessions.handle(env(
+            MessageType::SessionIceRestart,
+            "ses_a",
+            serde_json::json!({}),
+        ));
+        assert!(matches!(rx.try_recv(), Ok(SessionEvent::RestartIce)));
+
+        sessions.handle(env(
+            MessageType::SessionResume,
+            "ses_a",
+            serde_json::json!({"resumed": false, "reason": "resume_failed"}),
+        ));
+        assert!(matches!(rx.try_recv(), Ok(SessionEvent::RemoteEnd)));
+        assert!(sessions.active.is_empty());
+
+        sessions.on_reconnected();
+        assert!(out_rx.try_recv().is_err(), "nothing left to resume");
+    }
 
     #[test]
     fn only_explicit_allow_proceeds() {
