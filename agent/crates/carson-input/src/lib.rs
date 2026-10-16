@@ -16,6 +16,15 @@ mod macos;
 #[cfg(target_os = "windows")]
 mod windows;
 
+/// Windows: makes every coordinate API (monitor bounds, capture size, SendInput) use physical
+/// pixels. Must run at process start: monitor bounds measured before it are in scaled
+/// (logical) pixels on 125%/150% displays, which put the remote cursor in the wrong place.
+/// No-op elsewhere.
+pub fn enable_dpi_awareness() {
+    #[cfg(target_os = "windows")]
+    windows::enable_dpi_awareness();
+}
+
 /// The streamed display's rectangle in the OS's global input coordinate space
 /// (macOS: points, origin top-left of the main display; Windows: virtual-desktop pixels).
 #[derive(Debug, Clone, Copy, PartialEq)]

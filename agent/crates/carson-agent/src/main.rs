@@ -652,6 +652,7 @@ fn install_tls_provider() {
 #[tokio::main]
 async fn main() -> ExitCode {
     install_tls_provider();
+    carson_input::enable_dpi_awareness();
     let cli = match parse_args(std::env::args().skip(1)) {
         Ok(cli) => cli,
         Err(e) => {
