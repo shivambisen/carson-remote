@@ -7,7 +7,21 @@ publish.workspace = true
 
 [dependencies]
 anyhow = "1"
-openh264 = "0.9.8"
+openh264 = { version = "0.9.8", default-features = false }
+dirs = { version = "7.0.0", optional = true }
+
+[features]
+# Development/tests: compile OpenH264 from source. Release builds must disable this (Cisco's
+# royalty coverage applies only to its own binaries) and rely on `openh264-cisco`.
+default = ["openh264-source", "openh264-cisco"]
+openh264-source = ["openh264/source"]
+openh264-cisco = ["openh264/libloading", "dep:dirs"]
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-core-foundation = "0.3.2"
+objc2-core-media = "0.3.2"
+objc2-core-video = "0.3.2"
+objc2-video-toolbox = "0.3.2"
 
 [lints]
 workspace = true
