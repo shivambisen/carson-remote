@@ -86,20 +86,6 @@ impl Banner {
     }
 }
 
-/// Shows an informational window (e.g. the connection code) without waiting for it.
-pub fn show_info(title: &str, message: &str) {
-    let spawned = std::env::current_exe().and_then(|exe| {
-        std::process::Command::new(exe)
-            .args(["ui", "info", "--title", title, "--message", message])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .spawn()
-    });
-    if let Err(e) = spawned {
-        tracing::warn!(error = %e, "could not show the info window");
-    }
-}
-
 /// Entry point of the hidden `ui` subcommand.
 pub fn helper_main(args: &[String]) -> Result<()> {
     let get = |flag: &str| -> Result<&str> {

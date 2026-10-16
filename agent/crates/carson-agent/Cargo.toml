@@ -74,6 +74,10 @@ windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_UI_Window
 # Tray icon + native menu (macOS menu bar, Windows notification area).
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 tray-icon = "=0.26.0"
+# The app window: a native window (tao) with a system web view (wry: WebKit / WebView2)
+# showing the embedded UI.
+tao = "=0.37.1"
+wry = { version = "=0.57.0", default-features = false }
 
 [dev-dependencies]
 openh264 = { version = "0.9.8", default-features = false, features = ["libloading"] }

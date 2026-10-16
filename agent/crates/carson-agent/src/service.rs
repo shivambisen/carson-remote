@@ -44,11 +44,11 @@ fn launch() -> Result<Launch> {
     Ok(match () {
         _ if tray_supported && is_app => Launch {
             exe,
-            args: vec!["app".into()],
+            args: vec!["app".into(), "--background".into()],
         },
         _ if tray_supported && sibling.is_file() => Launch {
             exe: sibling,
-            args: vec!["app".into()],
+            args: vec!["app".into(), "--background".into()],
         },
         _ => Launch {
             exe,

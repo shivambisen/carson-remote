@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>glenley</title>
+<style>
+  :root {
+    --paper: #f5f5f4; --ink: #0e1229; --muted: #6b7280; --faint: #9aa1aa; --line: #e7e5e4;
+    --card: #ffffff; --accent: #f97316; --accent-deep: #c2410c; --ok: #16a34a; --bad: #dc2626;
+    color-scheme: light;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    background: var(--paper); color: var(--ink); -webkit-font-smoothing: antialiased;
+    user-select: none; -webkit-user-select: none; cursor: default;
+  }
+  .serif { font-family: "Source Serif 4", "Iowan Old Style", Georgia, "Times New Roman", serif; font-weight: 400; letter-spacing: -0.02em; }
+  main { padding: 22px 22px 18px; display: flex; flex-direction: column; gap: 14px; min-height: 100%; }
+  header { display: flex; align-items: center; gap: 10px; }
+  header svg { width: 30px; height: 30px; }
+  header .name { font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
+  header .ver { margin-left: auto; color: var(--faint); font-size: 12px; }
+  .card { background: var(--card); border-radius: 16px; padding: 18px; box-shadow: 0 1px 2px rgb(14 18 41 / .06), 0 8px 24px -8px rgb(14 18 41 / .12); }
+  h1 { margin: 0; font-size: 30px; line-height: 1.1; }
+  h2 { margin: 0 0 4px; font-size: 15px; font-weight: 600; }
+  p { margin: 6px 0 0; color: var(--muted); }
+  .status { display: flex; align-items: center; gap: 10px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--faint); flex: none; }
+  .dot.on { background: var(--ok); box-shadow: 0 0 0 4px rgb(22 163 74 / .15); }
+  .dot.live { background: var(--accent); box-shadow: 0 0 0 4px rgb(249 115 22 / .18); }
+  .status .title { font-weight: 600; font-size: 15px; }
+  .status .sub { color: var(--muted); font-size: 13px; }
+  button {
+    font: inherit; border: 0; border-radius: 12px; padding: 11px 16px; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px; font-weight: 500;
+  }
+  button:disabled { opacity: .5; cursor: default; }
+  .primary { background: var(--ink); color: #fff; box-shadow: 0 1px 2px rgb(61 61 61 / .7), 0 6px 16px -6px rgb(0 0 0 / .35); }
+  .primary:hover:not(:disabled) { background: #1b2140; }
+  .accent { background: var(--accent); color: #fff; }
+  .ghost { background: var(--paper); color: var(--ink); }
+  .ghost:hover:not(:disabled) { background: #ecebea; }
+  .link { background: none; padding: 4px 2px; color: var(--muted); text-decoration: underline; text-underline-offset: 3px; font-weight: 400; }
+  .danger { color: var(--bad); }
+  .stack { display: flex; flex-direction: column; gap: 10px; }
+  .row { display: flex; gap: 10px; }
+  .row > * { flex: 1; }
+  .choice { display: flex; gap: 6px; background: var(--paper); padding: 4px; border-radius: 12px; }
+  .choice button { flex: 1; padding: 8px; background: transparent; color: var(--muted); font-size: 13px; }
+  .choice button.sel { background: #fff; color: var(--ink); box-shadow: 0 1px 3px rgb(14 18 41 / .12); }
+  .code { font: 600 34px/1.1 ui-monospace, "SF Mono", Menlo, Consolas, monospace; letter-spacing: .14em; text-align: center; padding: 14px 0 6px; user-select: text; -webkit-user-select: text; }
+  .hint { font-size: 12px; color: var(--faint); text-align: center; }
+  .setting { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+  .setting:first-of-type { border-top: 0; }
+  .setting .text { flex: 1; }
+  .setting .text b { font-weight: 500; display: block; }
+  .setting .text span { color: var(--muted); font-size: 12px; }
+  .switch { width: 40px; height: 24px; border-radius: 12px; background: #d6d3d1; position: relative; padding: 0; flex: none; transition: background .15s; }
+  .switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgb(0 0 0 / .2); transition: transform .15s; }
+  .switch.on { background: var(--ink); }
+  .switch.on::after { transform: translateX(16px); }
+  .perm { display: flex; align-items: center; gap: 10px; padding: 8px 0; }
+  .perm .ok { color: var(--ok); font-weight: 600; }
+  .perm .no { color: var(--accent-deep); font-weight: 600; }
+  .perm .label { flex: 1; }
+  .problem { background: #fff7ed; color: var(--accent-deep); border-radius: 12px; padding: 10px 12px; font-size: 13px; }
+  .live-card { background: #fff7ed; border: 1px solid #fed7aa; }
+  footer { margin-top: auto; display: flex; justify-content: space-between; align-items: center; padding-top: 4px; }
+  .small { padding: 8px 12px; font-size: 13px; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <svg viewBox="0 0 100 100" aria-hidden="true"><path fill="#0e1229" fill-rule="evenodd" d="M40.90 7.67 41.95 7.62 42.94 7.73 44.09 8.04 45.36 8.78 46.09 9.53 46.54 10.26 46.91 11.11 47.20 12.50 47.23 13.87 47.12 14.86 45.81 20.68 44.68 26.66 43.86 31.59 43.07 37.79 42.94 40.52 43.09 42.38 43.56 43.32 44.61 44.24 46.17 45.06 47.66 45.53 48.89 45.72 50.75 45.77 52.49 45.59 53.98 45.16 54.92 44.73 56.21 43.76 56.85 42.87 57.14 42.01 57.20 41.39 56.07 28.25 56.17 26.88 56.58 25.64 57.42 24.16 58.54 22.79 59.97 21.55 61.17 20.78 62.90 19.97 64.27 19.52 65.88 19.18 67.74 19.03 70.47 19.20 71.95 19.53 73.17 19.94 74.68 20.64 75.67 21.24 77.08 22.30 77.90 23.07 78.66 23.91 79.76 25.39 81.00 27.62 82.60 30.85 83.77 33.58 85.02 36.92 85.40 37.67 85.89 38.29 86.46 38.79 87.09 39.16 87.70 39.35 88.32 39.38 88.94 39.20 89.31 38.91 89.68 38.44 90.06 37.17 90.03 35.68 89.75 34.32 89.31 33.15 87.10 28.87 86.29 27.01 85.82 25.27 85.69 23.78 85.91 22.67 86.46 22.13 86.95 21.97 87.32 21.99 88.07 22.41 89.70 24.78 91.71 28.25 93.25 31.59 93.67 32.71 94.06 34.20 94.50 36.80 94.49 39.53 94.06 41.51 93.66 42.50 93.22 43.25 92.37 44.24 91.20 45.11 90.05 45.65 88.44 46.02 87.08 46.06 85.71 45.88 84.60 45.55 83.61 45.12 82.24 44.30 81.28 43.49 80.35 42.50 79.18 40.77 78.34 38.91 77.00 34.82 75.80 31.65 74.61 28.99 73.44 27.01 72.86 26.39 72.32 25.97 70.84 25.23 69.60 24.95 67.99 24.92 66.62 25.21 65.88 25.51 65.13 25.98 64.36 26.76 64.07 27.25 63.84 28.00 63.79 28.87 64.74 33.08 65.88 39.76 66.02 42.01 65.87 43.25 65.51 44.40 65.12 45.23 64.02 46.83 62.90 47.96 61.91 48.76 60.69 49.57 58.32 50.75 56.08 51.52 54.72 51.84 51.50 52.30 48.15 52.29 45.30 51.92 43.69 51.54 42.32 51.09 41.33 50.72 39.77 49.94 38.48 49.10 37.12 47.96 36.37 47.12 35.56 45.97 35.13 45.16 34.64 43.87 34.37 42.50 34.31 40.89 34.74 37.92 35.54 33.70 36.74 28.37 37.49 25.53 38.71 21.55 41.54 13.62 41.55 13.12 41.33 12.64 41.08 12.45 40.59 12.37 39.97 12.44 39.10 12.71 38.11 13.18 37.37 13.59 36.00 14.68 33.28 17.80 30.70 21.30 28.03 25.64 25.97 29.73 24.79 32.46 22.64 38.41 21.90 40.15 21.07 41.51 20.01 42.75 18.47 43.99 17.14 44.73 15.92 45.21 14.31 45.60 12.94 45.69 11.58 45.57 10.10 45.11 8.85 44.41 8.18 43.87 7.37 42.97 6.87 42.22 6.21 40.77 5.92 39.53 5.76 38.29 5.86 35.81 6.13 34.29 6.59 32.58 7.74 29.58 8.93 27.25 10.09 25.28 12.57 21.69 13.07 21.36 13.56 21.27 14.18 21.42 14.56 21.72 14.77 22.05 14.90 22.67 14.81 24.28 14.44 25.77 13.94 27.01 11.71 31.10 10.91 32.83 10.46 34.32 10.29 35.31 10.27 36.06 10.54 37.42 10.88 38.04 11.23 38.41 11.83 38.78 12.32 38.92 12.94 38.95 13.69 38.77 14.68 38.10 15.60 36.92 17.66 31.93 18.83 29.36 20.04 27.01 21.65 24.28 24.01 20.81 25.59 18.69 26.73 17.34 28.85 14.98 30.55 13.27 31.91 12.03 33.52 10.79 35.38 9.62 37.12 8.76 39.10 8.03 40.90 7.67ZM6.19 48.82 7.49 48.93 8.61 49.30 10.05 50.06 11.70 51.22 13.19 52.47 15.09 54.40 16.66 56.33 17.86 58.12 19.11 60.48 19.84 62.46 20.26 64.17 20.80 67.42 21.30 69.65 22.01 72.25 22.84 74.61 23.64 76.47 24.83 78.82 26.03 80.81 27.30 82.67 28.81 84.47 29.50 85.15 31.20 86.39 32.78 87.19 33.89 87.63 35.13 88.02 36.87 88.32 37.38 88.25 37.49 87.87 36.69 86.01 35.92 83.78 34.76 79.69 33.99 76.35 33.20 71.39 33.08 68.04 33.16 66.55 33.39 65.31 33.58 64.57 34.02 63.49 34.67 62.46 35.26 61.83 35.95 61.22 37.24 60.33 39.47 59.21 41.70 58.43 43.19 58.07 46.66 57.55 50.01 57.42 53.61 57.62 56.33 58.07 57.94 58.47 59.93 59.14 62.41 60.35 63.77 61.29 64.65 62.09 65.41 62.96 66.24 64.32 66.76 65.81 66.90 67.42 66.70 70.02 66.25 73.62 65.58 77.46 65.59 78.33 65.75 78.55 66.18 78.82 67.12 79.13 68.36 79.29 69.60 79.27 71.83 78.84 72.94 78.48 73.94 78.03 75.11 77.34 76.04 76.61 77.16 75.32 77.83 73.99 78.85 70.15 79.64 67.92 80.80 62.96 81.56 60.48 82.37 59.01 83.98 56.71 85.18 55.27 87.09 53.29 88.94 51.71 90.87 50.44 92.53 49.73 93.77 49.60 94.27 49.67 94.76 49.89 95.21 50.19 95.68 50.68 96.00 51.30 96.18 51.92 96.29 52.79 96.30 53.91 95.92 57.01 94.92 61.10 93.70 64.69 92.96 66.43 92.71 66.80 92.04 67.21 91.42 67.25 90.68 66.80 90.36 66.06 90.36 65.56 90.64 64.32 92.06 59.24 92.38 57.25 92.38 57.01 92.16 56.77 91.79 56.84 91.37 57.13 90.18 58.25 89.43 59.11 88.65 60.23 87.94 61.53 87.45 62.82 86.54 67.17 85.32 71.26 84.57 73.25 83.84 74.86 82.64 76.72 81.75 77.80 80.33 79.20 78.65 80.53 77.48 81.30 75.42 82.43 73.69 83.17 70.84 84.02 68.61 84.42 67.37 84.52 65.51 84.54 63.65 84.35 62.04 83.99 60.18 83.23 58.94 82.43 57.87 81.30 57.41 80.56 57.11 79.82 56.86 78.33 57.56 70.15 57.61 67.30 57.52 66.92 57.16 66.43 56.13 65.56 55.34 65.11 53.23 64.38 51.50 64.09 49.76 63.98 47.90 64.07 46.29 64.33 44.74 64.82 43.94 65.17 43.35 65.56 42.38 66.55 42.02 67.54 42.30 73.37 42.66 77.46 43.12 80.81 43.79 84.53 44.83 88.25 44.88 89.49 44.41 90.60 44.00 91.10 43.32 91.61 42.45 91.99 41.08 92.31 39.23 92.38 36.13 91.95 34.71 91.59 31.42 90.42 29.06 89.26 26.47 87.63 24.85 86.39 23.61 85.23 21.99 83.51 19.64 80.47 18.89 79.32 17.29 76.47 16.10 73.99 15.30 72.01 14.53 69.65 13.70 66.30 13.08 62.96 12.72 61.72 12.35 60.85 11.58 59.53 10.71 58.38 9.60 57.18 8.81 56.51 8.11 56.04 7.86 56.00 7.69 56.14 7.62 56.63 7.82 58.12 9.22 62.96 9.40 64.44 9.38 65.31 9.10 65.93 8.73 66.23 8.36 66.37 7.61 66.32 6.99 65.88 6.17 63.82 4.64 58.86 4.13 56.39 3.70 53.16 3.77 51.30 4.17 50.06 4.99 49.20 5.63 48.92 6.19 48.82Z"/></svg>
+    <span class="name">glenley</span>
+    <span class="ver" id="ver"></span>
+  </header>
+
+  <div id="problem" class="problem hidden"></div>
+
+  <!-- Live session -->
+  <section id="live" class="card live-card hidden">
+    <div class="status"><span class="dot live"></span><div><div class="title" id="live-text"></div><div class="sub">The glenley icon stays orange while they're connected.</div></div></div>
+  </section>
+
+  <!-- Not set up -->
+  <section id="setup" class="stack hidden">
+    <div class="card">
+      <h1 class="serif">Set up this computer</h1>
+      <p>Choose how this computer should be reached.</p>
+    </div>
+    <div class="card stack">
+      <h2>It's my computer</h2>
+      <p style="margin-top:-2px">Sign in with your account (e.g. Google). Then reach it from any browser, any time.</p>
+      <button class="primary" id="signin">Sign in with my account</button>
+    </div>
+    <div class="card stack">
+      <h2>Someone else will connect</h2>
+      <p style="margin-top:-2px">Get a code and give it to them. You don't need an account.</p>
+      <div class="choice" id="once-choice">
+        <button data-once="1" class="sel">Just this once</button>
+        <button data-once="0">Keep on their account</button>
+      </div>
+      <button class="accent" id="getcode">Get a code</button>
+    </div>
+  </section>
+
+  <!-- Waiting: browser sign-in or code -->
+  <section id="waiting" class="card stack hidden">
+    <div id="code-box" class="hidden">
+      <h2 style="text-align:center">Your code</h2>
+      <div class="code" id="code"></div>
+      <p class="hint" id="code-hint"></p>
+      <div class="row" style="margin-top:12px"><button class="primary" id="copy">Copy code</button></div>
+      <p class="hint" style="margin-top:10px">They open <b>app.glenley.in</b>, choose <b>Enter a code</b>, and type it. It works for 10 minutes.</p>
+    </div>
+    <div id="signin-box" class="hidden" style="text-align:center">
+      <h2>Finish in your browser</h2>
+      <p>Sign in on the page that opened. This window updates by itself.</p>
+    </div>
+    <button class="link" id="cancel">Cancel</button>
+  </section>
+
+  <!-- Set up -->
+  <section id="ready" class="stack hidden">
+    <div class="card">
+      <div class="status"><span class="dot" id="dot"></span><div><div class="title" id="name"></div><div class="sub" id="state"></div></div></div>
+      <div class="row" style="margin-top:14px"><button class="ghost small" id="website">Open glenley website</button></div>
+    </div>
+    <div class="card" id="perms" >
+      <h2>Permissions</h2>
+      <div class="perm"><span class="label">Screen Recording</span><span id="p-screen"></span><button class="ghost small hidden" id="fix-screen">Allow…</button></div>
+      <div class="perm"><span class="label">Accessibility (mouse &amp; keyboard)</span><span id="p-access"></span><button class="ghost small hidden" id="fix-access">Allow…</button></div>
+    </div>
+    <div class="card">
+      <h2>Settings</h2>
+      <div class="setting"><div class="text"><b>Ask before each connection</b><span>Someone here clicks Allow first</span></div><button class="switch" data-key="ask"></button></div>
+      <div class="setting"><div class="text"><b>Show on-screen indicator</b><span>A small pill while connected</span></div><button class="switch" data-key="indicator"></button></div>
+      <div class="setting"><div class="text"><b>Start at login</b><span>Stay reachable after a restart</span></div><button class="switch" data-key="login"></button></div>
+    </div>
+  </section>
+
+  <footer>
+    <button class="link danger hidden" id="leave">Remove from account</button>
+    <span></span>
+    <button class="link" id="quit">Quit glenley</button>
+  </footer>
+</main>
+<script>
+  const $ = (id) => document.getElementById(id);
+  const send = (msg) => window.ipc.postMessage(JSON.stringify(msg));
+  let once = true;
+  let state = null;
+
+  $("signin").onclick = () => send({ cmd: "signin" });
+  $("getcode").onclick = () => send({ cmd: "code", once });
+  $("cancel").onclick = () => send({ cmd: "cancel" });
+  $("copy").onclick = () => { if (state && state.code) { send({ cmd: "copy", text: state.code }); $("copy").textContent = "Copied"; setTimeout(() => ($("copy").textContent = "Copy code"), 1500); } };
+  $("website").onclick = () => send({ cmd: "website" });
+  $("quit").onclick = () => send({ cmd: "quit" });
+  $("leave").onclick = () => { if (confirm("Remove this computer from its account? It can't be reached until it's set up again.")) send({ cmd: "leave" }); };
+  $("fix-screen").onclick = () => send({ cmd: "permission", which: "screen" });
+  $("fix-access").onclick = () => send({ cmd: "permission", which: "accessibility" });
+  for (const b of document.querySelectorAll("#once-choice button")) {
+    b.onclick = () => { once = b.dataset.once === "1"; for (const x of document.querySelectorAll("#once-choice button")) x.classList.toggle("sel", x === b); };
+  }
+  for (const s of document.querySelectorAll(".switch")) {
+    s.onclick = () => send({ cmd: "setting", key: s.dataset.key, value: !s.classList.contains("on") });
+  }
+
+  const show = (id, on) => $(id).classList.toggle("hidden", !on);
+  window.glenley = {
+    update(s) {
+      state = s;
+      $("ver").textContent = "v" + s.version;
+      show("problem", !!s.problem && s.busy === null); $("problem").textContent = s.problem || "";
+      show("live", !!s.live); $("live-text").textContent = s.live || "";
+      const paired = !!s.paired;
+      show("setup", !paired && s.busy === null);
+      show("waiting", !paired && s.busy !== null);
+      show("code-box", s.busy === "code" && !!s.code);
+      show("signin-box", s.busy === "signin" || (s.busy === "code" && !s.code));
+      $("code").textContent = s.code || "";
+      $("code-hint").textContent = s.codeOnce ? "This computer leaves their account after they disconnect." : "This computer stays on their account until it's removed.";
+      show("ready", paired);
+      show("leave", paired);
+      if (paired) {
+        $("name").textContent = s.paired;
+        $("dot").className = "dot" + (s.live ? " live" : s.online ? " on" : "");
+        $("state").textContent = s.online ? "Online · reachable from " + (s.server || "the website").replace(/^https?:\/\//, "") : "Connecting…";
+      }
+      const perm = (el, fix, ok) => {
+        $(el).innerHTML = ok ? '<span class="ok">Allowed</span>' : '<span class="no">Not allowed</span>';
+        show(fix, !ok);
+      };
+      show("perms", s.permissions !== null);
+      if (s.permissions) { perm("p-screen", "fix-screen", s.permissions.screen); perm("p-access", "fix-access", s.permissions.accessibility); }
+      for (const sw of document.querySelectorAll(".switch")) sw.classList.toggle("on", !!s.settings[sw.dataset.key]);
+    },
+  };
+  send({ cmd: "ready" });
+</script>
+</body>
+</html>

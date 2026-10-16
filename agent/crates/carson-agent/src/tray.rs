@@ -1,17 +1,28 @@
-//! The tray app (`glenley`): a menu-bar / notification-area icon that keeps this computer
-//! online and holds its settings, so nobody needs the command line.
+//! The glenley app: a normal window (opened from the Start menu / Applications) plus a tray /
+//! menu-bar icon, keeping this computer online in the background.
 //!
-//! The tray owns the main thread (AppKit requires it, and Windows delivers tray messages to the
-//! thread that created the icon). The agent runs on a Tokio runtime thread; the two talk over
-//! channels. The icon always shows when someone is connected: that is the one sign of a session
-//! that cannot be turned off (the on-screen pill and the Allow prompt are optional).
+//! - The window (tao + the system web view via wry) shows the embedded UI in `assets/app.html`:
+//!   set up (sign in, or get a code), status, permissions and settings. It talks to Rust over
+//!   the web view's IPC channel and receives state as JSON.
+//! - Closing the window keeps glenley running; opening glenley again (second launch, Dock or
+//!   tray click) brings it back. Only one copy runs: later launches just ask the first to show.
+//! - The agent runs on a Tokio runtime thread; the window/tray own the main thread (AppKit
+//!   requires it). The tray icon always changes while someone is connected.
 
-use std::path::PathBuf;
-use std::sync::mpsc;
+use std::io::Write as _;
+use std::net::{TcpListener, TcpStream};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
-use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
+use serde_json::json;
+use tao::dpi::LogicalSize;
+use tao::event::{Event, StartCause, WindowEvent};
+use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy, EventLoopWindowTarget};
+use tao::window::{Window, WindowBuilder};
+use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
+use wry::{WebView, WebViewBuilder};
 
 use crate::{config, service};
 
@@ -19,28 +30,45 @@ use crate::{config, service};
 /// build time (`CARSON_DEFAULT_SERVER=https://… cargo build`), e.g. by the release workflow.
 const DEFAULT_SERVER: Option<&str> = option_env!("CARSON_DEFAULT_SERVER");
 
-/// Tray → agent.
+const APP_HTML: &str = include_str!("../assets/app.html");
+
+/// Loopback port the running copy listens on, so a second launch can ask it to show its window.
+const INSTANCE_PORT: u16 = 47533;
+
+/// Window → agent.
 enum Cmd {
     SignIn,
     /// Show a code for someone else to enter; `once`: leave their account after one session.
     Code {
         once: bool,
     },
+    /// Stop waiting for a sign-in or code.
+    Cancel,
     /// Remove this computer from its account (server too) and forget it here.
     Leave,
     Quit,
 }
 
-/// Agent → tray.
+/// Agent → window.
 enum Note {
-    /// Paired as this name (None: not signed in).
+    /// Paired as this name (None: not set up).
     Paired(Option<String>),
-    /// A one-line problem to show in the menu.
+    /// A one-line problem to show.
     Problem(Option<String>),
-    /// The connection code to show (None: no code pending).
-    Code(Option<String>),
-    /// The agent has stopped; the app can exit.
-    Stopped,
+    /// Waiting for "signin" or "code" (None: idle).
+    Busy(Option<&'static str>),
+    /// The code to show, and whether it is a one-time share.
+    Code(Option<String>, bool),
+}
+
+enum UserEvent {
+    Note(Note),
+    Menu(MenuEvent),
+    Tray(TrayIconEvent),
+    /// Another launch asked us to show the window.
+    Show,
+    /// A message from the window's page.
+    Ipc(String),
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -50,40 +78,149 @@ enum Look {
     Live,
 }
 
-pub fn run(dir: PathBuf, server: Option<String>) -> Result<()> {
-    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
-    let (note_tx, note_rx) = mpsc::channel();
-    let agent_dir = dir.clone();
-    let agent_server = server.clone();
-    let agent = std::thread::Builder::new()
-        .name("glenley-agent".into())
-        .spawn(move || {
-            let rt = tokio::runtime::Runtime::new().expect("start runtime");
-            rt.block_on(controller(agent_dir, agent_server, cmd_rx, note_tx.clone()));
-            let _ = note_tx.send(Note::Stopped);
-        })
-        .context("start agent thread")?;
+/// Runs the app. `background`: start with the window hidden (login item).
+pub fn run(dir: PathBuf, server: Option<String>, background: bool) -> Result<()> {
+    // One copy only: if one is running, ask it to show its window and stop.
+    let listener = match TcpListener::bind(("127.0.0.1", INSTANCE_PORT)) {
+        Ok(l) => l,
+        Err(_) => {
+            if let Ok(mut s) = TcpStream::connect(("127.0.0.1", INSTANCE_PORT)) {
+                let _ = s.write_all(b"show\n");
+                return Ok(());
+            }
+            anyhow::bail!("port {INSTANCE_PORT} is in use by another program");
+        }
+    };
 
-    let mut ui = Ui::new(&dir, server.clone())?;
-    // First launch: go straight to the browser sign-in instead of waiting for a click.
-    let unpaired = matches!(config::load(&dir), Ok(None));
-    if unpaired && (server.is_some() || DEFAULT_SERVER.is_some()) {
-        ui.signing_in = true;
-        let _ = cmd_tx.send(Cmd::SignIn);
+    let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
+    let proxy = event_loop.create_proxy();
+    {
+        let p = proxy.clone();
+        std::thread::spawn(move || {
+            for conn in listener.incoming() {
+                if conn.is_ok() {
+                    let _ = p.send_event(UserEvent::Show);
+                }
+            }
+        });
     }
-    let result = event_loop(|| ui.tick(&dir, &cmd_tx, &note_rx));
-    let _ = cmd_tx.send(Cmd::Quit);
-    let _ = agent.join();
-    result
+    {
+        let p = proxy.clone();
+        MenuEvent::set_event_handler(Some(move |e| {
+            let _ = p.send_event(UserEvent::Menu(e));
+        }));
+        let p = proxy.clone();
+        TrayIconEvent::set_event_handler(Some(move |e| {
+            let _ = p.send_event(UserEvent::Tray(e));
+        }));
+    }
+
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
+    {
+        let (dir, server, p) = (dir.clone(), server.clone(), proxy.clone());
+        std::thread::Builder::new()
+            .name("glenley-agent".into())
+            .spawn(move || {
+                let rt = tokio::runtime::Runtime::new().expect("start runtime");
+                rt.block_on(controller(dir, server, cmd_rx, p));
+            })
+            .context("start agent thread")?;
+    }
+
+    let window = WindowBuilder::new()
+        .with_title("glenley")
+        .with_inner_size(LogicalSize::new(440.0, 700.0))
+        .with_min_inner_size(LogicalSize::new(380.0, 520.0))
+        .with_window_icon(window_icon())
+        .with_visible(!background)
+        .build(&event_loop)
+        .context("open the glenley window")?;
+    let webview = {
+        let p = proxy.clone();
+        WebViewBuilder::new()
+            .with_html(APP_HTML)
+            .with_ipc_handler(move |req| {
+                let _ = p.send_event(UserEvent::Ipc(req.body().clone()));
+            })
+            .build(&window)
+    };
+    let webview = match webview {
+        Ok(w) => Some(w),
+        Err(e) => {
+            // Windows without the WebView2 runtime: keep running from the tray.
+            tracing::error!(error = %e, "cannot show the app window");
+            None
+        }
+    };
+
+    let mut app = App::new(dir, server, window, webview, cmd_tx);
+    let mut quitting: Option<Instant> = None;
+    event_loop.run(move |event, target, control_flow| {
+        *control_flow = ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(500));
+        match event {
+            Event::NewEvents(StartCause::Init) => {
+                // macOS: the tray icon must be created once the event loop runs.
+                app.tray = build_tray()
+                    .map_err(|e| tracing::error!(error = %format!("{e:#}"), "tray icon"))
+                    .ok();
+                if background {
+                    set_dock_icon(target, false);
+                } else {
+                    app.show(target);
+                }
+            }
+            Event::UserEvent(UserEvent::Note(note)) => app.on_note(note),
+            Event::UserEvent(UserEvent::Show) => app.show(target),
+            Event::UserEvent(UserEvent::Ipc(msg)) => {
+                if app.on_ipc(&msg) && quitting.is_none() {
+                    quitting = Some(Instant::now());
+                    let _ = app.cmds.send(Cmd::Quit);
+                }
+            }
+            Event::UserEvent(UserEvent::Menu(e)) => {
+                match app.tray.as_ref().and_then(|t| t.item(&e)) {
+                    Some(TrayItem::Open) => app.show(target),
+                    Some(TrayItem::Quit) if quitting.is_none() => {
+                        quitting = Some(Instant::now());
+                        let _ = app.cmds.send(Cmd::Quit);
+                    }
+                    _ => {}
+                }
+            }
+            Event::UserEvent(UserEvent::Tray(TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            })) if cfg!(windows) => app.show(target),
+            Event::WindowEvent {
+                event: WindowEvent::CloseRequested,
+                ..
+            } => app.hide(target),
+            Event::Reopen { .. } => app.show(target),
+            _ => {}
+        }
+        if let Some(since) = quitting {
+            // Give the agent a moment to end sessions cleanly.
+            if since.elapsed() > Duration::from_millis(300) {
+                *control_flow = ControlFlow::Exit;
+                return;
+            }
+            *control_flow = ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(100));
+        }
+        app.refresh();
+    })
 }
 
-/// Runs the agent: online while signed in, otherwise waits for "Sign in".
+/// Runs the agent: online while set up, otherwise waits for "Sign in" or "Get a code".
 async fn controller(
     dir: PathBuf,
     server: Option<String>,
     mut cmds: tokio::sync::mpsc::UnboundedReceiver<Cmd>,
-    notes: mpsc::Sender<Note>,
+    proxy: EventLoopProxy<UserEvent>,
 ) {
+    let note = |n: Note| {
+        let _ = proxy.send_event(UserEvent::Note(n));
+    };
     // The software codec is only needed without a hardware encoder; failure is not fatal.
     if let Err(e) = crate::codec::ensure_openh264().await {
         tracing::warn!(error = %format!("{e:#}"), "OpenH264 not installed");
@@ -92,13 +229,13 @@ async fn controller(
         let cfg = match config::load(&dir) {
             Ok(c) => c,
             Err(e) => {
-                let _ = notes.send(Note::Problem(Some(format!("Settings unreadable: {e:#}"))));
+                note(Note::Problem(Some(format!("Settings unreadable: {e:#}"))));
                 None
             }
         };
-        let _ = notes.send(Note::Paired(cfg.as_ref().map(|c| c.name.clone())));
+        note(Note::Paired(cfg.as_ref().map(|c| c.name.clone())));
         if cfg.is_some() {
-            let _ = notes.send(Note::Problem(None));
+            note(Note::Problem(None));
             tokio::select! {
                 r = crate::run(dir.clone(), crate::media::MediaOptions::default()) => {
                     let err = r.err();
@@ -109,13 +246,12 @@ async fn controller(
                         // Removed on the website, or a one-time share ended: start over here.
                         tracing::info!("this computer was removed from its account");
                         sign_out(&dir);
-                        let _ = notes.send(Note::Problem(Some("Removed from the account".into())));
+                        note(Note::Problem(Some("This computer was removed from the account.".into())));
                         continue;
                     }
                     let msg = err.map_or_else(|| "Stopped".to_owned(), |e| format!("{e:#}"));
                     tracing::error!(error = %msg, "agent stopped");
-                    let _ = notes.send(Note::Problem(Some(short(&msg))));
-                    // Wait for the user (remove / quit) rather than retrying a fatal error.
+                    note(Note::Problem(Some(short(&msg))));
                     match cmds.recv().await {
                         Some(Cmd::Leave) => leave(&dir).await,
                         Some(Cmd::Quit) | None => return,
@@ -131,61 +267,50 @@ async fn controller(
             continue;
         }
         let mut next = cmds.recv().await;
-        // A new choice (e.g. a code instead of signing in) cancels the one in progress.
+        // A new choice (e.g. a code instead of signing in) replaces the one in progress.
         while let Some(cmd @ (Cmd::SignIn | Cmd::Code { .. })) = next.take() {
             let Some(server) = server.clone().or_else(|| DEFAULT_SERVER.map(str::to_owned)) else {
-                let _ = notes.send(Note::Problem(Some(
+                note(Note::Problem(Some(
                     "No server configured: run `glenley-agent setup --server <URL>`".into(),
                 )));
                 break;
             };
-            let (opts, waiting) = match cmd {
+            let opts = match cmd {
                 Cmd::Code { once } => {
-                    let code_notes = notes.clone();
-                    let opts = crate::PairOptions {
+                    let p = proxy.clone();
+                    note(Note::Busy(Some("code")));
+                    crate::PairOptions {
                         temporary: once,
                         on_code: Some(Box::new(move |code: &str| {
-                            let _ = code_notes.send(Note::Code(Some(code.to_owned())));
-                            crate::ui::show_info(
-                                "glenley connection code",
-                                &format!(
-                                    "Your code: {code}\n\nGive it to the person who will connect. They open glenley in their browser and choose \"Enter a code\".{}\n\nThe code works for 10 minutes.",
-                                    if once {
-                                        "\n\nThis computer leaves their account after the session."
-                                    } else {
-                                        ""
-                                    }
-                                ),
-                            );
+                            let _ = p.send_event(UserEvent::Note(Note::Code(
+                                Some(code.to_owned()),
+                                once,
+                            )));
                         })),
                         ..Default::default()
-                    };
-                    (opts, "Waiting for the code to be entered…")
+                    }
                 }
-                _ => (
+                _ => {
+                    note(Note::Busy(Some("signin")));
                     crate::PairOptions {
                         open_browser: true,
                         ..Default::default()
-                    },
-                    "Finish signing in in your browser…",
-                ),
-            };
-            let _ = notes.send(Note::Problem(Some(waiting.into())));
-            tokio::select! {
-                r = crate::pair_with(dir.clone(), &server, None, opts) => {
-                    let _ = notes.send(Note::Code(None));
-                    let _ = notes.send(Note::Problem(r.err().map(|e| short(&format!("{e:#}")))));
-                }
-                c = cmds.recv() => {
-                    let _ = notes.send(Note::Code(None));
-                    let _ = notes.send(Note::Problem(None));
-                    // The abandoned pairing expires on the server; its key is replaced by the next one.
-                    match c {
-                        Some(Cmd::Quit) | None => return,
-                        other => next = other,
                     }
                 }
+            };
+            note(Note::Problem(None));
+            tokio::select! {
+                r = crate::pair_with(dir.clone(), &server, None, opts) => {
+                    note(Note::Problem(r.err().map(|e| short(&format!("{e:#}")))));
+                }
+                c = cmds.recv() => match c {
+                    Some(Cmd::Quit) | None => return,
+                    Some(Cmd::Cancel) => {}
+                    other => next = other,
+                },
             }
+            note(Note::Code(None, false));
+            note(Note::Busy(None));
         }
         if matches!(next, Some(Cmd::Quit)) {
             return;
@@ -193,13 +318,13 @@ async fn controller(
     }
 }
 
-fn sign_out(dir: &std::path::Path) {
+fn sign_out(dir: &Path) {
     if let Err(e) = crate::unpair(dir.to_path_buf()) {
         tracing::error!(error = %format!("{e:#}"), "sign out failed");
     }
 }
 
-async fn leave(dir: &std::path::Path) {
+async fn leave(dir: &Path) {
     if let Err(e) = crate::leave(dir.to_path_buf()).await {
         tracing::error!(error = %format!("{e:#}"), "remove from account failed");
     }
@@ -207,260 +332,330 @@ async fn leave(dir: &std::path::Path) {
 
 fn short(msg: &str) -> String {
     let line = msg.lines().next().unwrap_or(msg);
-    if line.chars().count() > 80 {
-        format!("{}…", line.chars().take(79).collect::<String>())
+    if line.chars().count() > 100 {
+        format!("{}…", line.chars().take(99).collect::<String>())
     } else {
         line.to_owned()
     }
 }
 
-struct Ui {
-    tray: TrayIcon,
-    status: MenuItem,
-    sign_in: MenuItem,
-    code_menu: Submenu,
-    code_once: MenuItem,
-    code_keep: MenuItem,
-    copy_code: MenuItem,
-    website: MenuItem,
-    ask: CheckMenuItem,
-    indicator: CheckMenuItem,
-    login: CheckMenuItem,
-    sign_out: MenuItem,
-    quit: MenuItem,
-    server: Option<String>,
-    paired: Option<String>,
-    problem: Option<String>,
-    look: Look,
-    last_status: String,
-    /// "Sign in" was clicked and has not completed yet.
-    signing_in: bool,
-    /// The connection code being shown, if any.
-    code: Option<String>,
+enum TrayItem {
+    Open,
+    Quit,
 }
 
-impl Ui {
-    fn new(dir: &std::path::Path, server: Option<String>) -> Result<Self> {
-        let cfg = config::load(dir).ok().flatten();
-        let status = MenuItem::new("Starting…", false, None);
-        let sign_in = MenuItem::new("Sign in…", true, None);
-        let code_once = MenuItem::new("Just this once", true, None);
-        let code_keep = MenuItem::new("Keep on their account", true, None);
-        let code_menu =
-            Submenu::with_items("Connect with a code", true, &[&code_once, &code_keep])?;
-        let copy_code = MenuItem::new("Copy code", false, None);
-        let website = MenuItem::new("Open glenley website", true, None);
-        let ask = CheckMenuItem::new(
-            "Ask before each connection",
-            cfg.is_some(),
-            cfg.as_ref().is_some_and(|c| c.ask_before_connect),
-            None,
-        );
-        let indicator = CheckMenuItem::new(
-            "Show on-screen indicator",
-            cfg.is_some(),
-            cfg.as_ref().is_some_and(|c| c.show_indicator),
-            None,
-        );
-        let login = CheckMenuItem::new("Start at login", true, service::is_installed(), None);
-        let sign_out = MenuItem::new("Remove from account", cfg.is_some(), None);
-        let quit = MenuItem::new("Quit glenley", true, None);
-        let menu = Menu::new();
-        menu.append_items(&[
-            &status,
-            &copy_code,
-            &PredefinedMenuItem::separator(),
-            &sign_in,
-            &code_menu,
-            &website,
-            &PredefinedMenuItem::separator(),
-            &ask,
-            &indicator,
-            &login,
-            &PredefinedMenuItem::separator(),
-            &sign_out,
-            &quit,
-        ])?;
-        let tray = TrayIconBuilder::new()
-            .with_menu(Box::new(menu))
-            .with_tooltip("glenley");
-        // macOS: a monochrome template icon matches the menu bar (light and dark).
-        #[cfg(target_os = "macos")]
-        let tray = tray.with_icon_templated(icon(Look::Offline));
-        #[cfg(not(target_os = "macos"))]
-        let tray = tray.with_icon(icon(Look::Offline));
-        let tray = tray.build().context("create tray icon")?;
-        Ok(Self {
-            tray,
-            status,
-            sign_in,
-            code_menu,
-            code_once,
-            code_keep,
-            copy_code,
-            website,
-            ask,
-            indicator,
-            login,
-            sign_out,
-            quit,
-            server: server.or_else(|| cfg.map(|c| c.server_url)),
+struct Tray {
+    icon: TrayIcon,
+    status: MenuItem,
+    open: MenuItem,
+    quit: MenuItem,
+}
+
+impl Tray {
+    fn item(&self, e: &MenuEvent) -> Option<TrayItem> {
+        if e.id() == self.open.id() {
+            Some(TrayItem::Open)
+        } else if e.id() == self.quit.id() {
+            Some(TrayItem::Quit)
+        } else {
+            None
+        }
+    }
+}
+
+fn build_tray() -> Result<Tray> {
+    let status = MenuItem::new("Starting…", false, None);
+    let open = MenuItem::new("Open glenley", true, None);
+    let quit = MenuItem::new("Quit glenley", true, None);
+    let menu = Menu::new();
+    menu.append_items(&[&open, &status, &PredefinedMenuItem::separator(), &quit])?;
+    let builder = TrayIconBuilder::new()
+        .with_menu(Box::new(menu))
+        .with_tooltip("glenley");
+    // macOS: a monochrome template icon matches the menu bar (light and dark).
+    #[cfg(target_os = "macos")]
+    let builder = builder.with_icon_templated(icon(Look::Offline));
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder.with_icon(icon(Look::Offline));
+    Ok(Tray {
+        icon: builder.build().context("create tray icon")?,
+        status,
+        open,
+        quit,
+    })
+}
+
+struct App {
+    dir: PathBuf,
+    server: Option<String>,
+    window: Window,
+    webview: Option<WebView>,
+    cmds: tokio::sync::mpsc::UnboundedSender<Cmd>,
+    tray: Option<Tray>,
+    page_ready: bool,
+    paired: Option<String>,
+    problem: Option<String>,
+    busy: Option<&'static str>,
+    code: Option<String>,
+    code_once: bool,
+    look: Look,
+    last_state: String,
+    last_status: String,
+}
+
+impl App {
+    fn new(
+        dir: PathBuf,
+        server: Option<String>,
+        window: Window,
+        webview: Option<WebView>,
+        cmds: tokio::sync::mpsc::UnboundedSender<Cmd>,
+    ) -> Self {
+        let server = server.or_else(|| config::load(&dir).ok().flatten().map(|c| c.server_url));
+        Self {
+            dir,
+            server,
+            window,
+            webview,
+            cmds,
+            tray: None,
+            page_ready: false,
             paired: None,
             problem: None,
-            look: Look::Offline,
-            last_status: String::new(),
-            signing_in: false,
+            busy: None,
             code: None,
-        })
+            code_once: true,
+            look: Look::Offline,
+            last_state: String::new(),
+            last_status: String::new(),
+        }
     }
 
-    /// Called every ~200 ms from the event loop. Returns false to quit.
-    fn tick(
-        &mut self,
-        dir: &std::path::Path,
-        cmds: &tokio::sync::mpsc::UnboundedSender<Cmd>,
-        notes: &mpsc::Receiver<Note>,
-    ) -> bool {
-        while let Ok(note) = notes.try_recv() {
-            match note {
-                Note::Paired(name) => {
-                    // Just signed in from this menu: start at login from now on, so the
-                    // computer stays reachable after a restart (untick to opt out).
-                    if self.signing_in && name.is_some() && !service::is_installed() {
-                        if let Err(e) = service::install(dir) {
-                            self.problem = Some(short(&format!("Start at login: {e:#}")));
-                        }
-                        self.login.set_checked(service::is_installed());
+    fn show(&mut self, target: &EventLoopWindowTarget<UserEvent>) {
+        if self.webview.is_none() {
+            // No web view on this system: the website is the next best thing.
+            if let Some(url) = self.website() {
+                service::open_browser(&url);
+            }
+            return;
+        }
+        set_dock_icon(target, true);
+        self.window.set_visible(true);
+        self.window.set_minimized(false);
+        self.window.set_focus();
+    }
+
+    fn hide(&mut self, target: &EventLoopWindowTarget<UserEvent>) {
+        self.window.set_visible(false);
+        set_dock_icon(target, false);
+    }
+
+    fn website(&self) -> Option<String> {
+        self.server
+            .clone()
+            .or_else(|| DEFAULT_SERVER.map(str::to_owned))
+            .map(|s| format!("{s}/#/devices"))
+    }
+
+    fn on_note(&mut self, note: Note) {
+        match note {
+            Note::Paired(name) => {
+                if name.is_some() {
+                    self.server = config::load(&self.dir)
+                        .ok()
+                        .flatten()
+                        .map(|c| c.server_url)
+                        .or(self.server.take());
+                    // Just set up from this window: start at login from now on (untick to opt out).
+                    if self.busy.is_some()
+                        && !service::is_installed()
+                        && let Err(e) = service::install(&self.dir)
+                    {
+                        self.problem = Some(short(&format!("Start at login: {e:#}")));
                     }
-                    if name.is_some() {
-                        self.signing_in = false;
-                        self.server = config::load(dir)
-                            .ok()
-                            .flatten()
-                            .map(|c| c.server_url)
-                            .or(self.server.take());
-                    }
-                    self.paired = name;
                 }
-                Note::Problem(p) => self.problem = p,
-                Note::Code(c) => self.code = c,
-                Note::Stopped => return false,
+                self.paired = name;
+            }
+            Note::Problem(p) => self.problem = p,
+            Note::Busy(b) => self.busy = b,
+            Note::Code(c, once) => {
+                self.code = c;
+                self.code_once = once;
             }
         }
-        while let Ok(ev) = MenuEvent::receiver().try_recv() {
-            let id = ev.id();
-            if id == self.quit.id() {
-                return false;
-            } else if id == self.sign_in.id() {
-                self.signing_in = true;
-                let _ = cmds.send(Cmd::SignIn);
-            } else if id == self.sign_out.id() {
-                let _ = cmds.send(Cmd::Leave);
-            } else if id == self.code_once.id() || id == self.code_keep.id() {
-                let once = id == self.code_once.id();
-                let _ = cmds.send(Cmd::Code { once });
-            } else if id == self.copy_code.id() {
-                if let Some(code) = &self.code
+    }
+
+    /// Handles a message from the page. Returns true to quit.
+    fn on_ipc(&mut self, msg: &str) -> bool {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(msg) else {
+            return false;
+        };
+        let flag = |k: &str| {
+            v.get(k)
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+        };
+        let text = |k: &str| v.get(k).and_then(serde_json::Value::as_str);
+        match text("cmd").unwrap_or("") {
+            "ready" => {
+                self.page_ready = true;
+                self.last_state.clear(); // push the full state now
+            }
+            "signin" => {
+                let _ = self.cmds.send(Cmd::SignIn);
+            }
+            "code" => {
+                let _ = self.cmds.send(Cmd::Code { once: flag("once") });
+            }
+            "cancel" => {
+                let _ = self.cmds.send(Cmd::Cancel);
+            }
+            "leave" => {
+                let _ = self.cmds.send(Cmd::Leave);
+            }
+            "quit" => return true,
+            "website" => {
+                if let Some(url) = self.website() {
+                    service::open_browser(&url);
+                }
+            }
+            "copy" => {
+                if let Some(t) = text("text")
                     && let Err(e) =
-                        arboard::Clipboard::new().and_then(|mut c| c.set_text(code.clone()))
+                        arboard::Clipboard::new().and_then(|mut c| c.set_text(t.to_owned()))
                 {
-                    self.problem = Some(short(&format!("Copy failed: {e}")));
+                    self.problem = Some(format!("Copy failed: {e}"));
                 }
-            } else if id == self.website.id() {
-                let url = self
-                    .server
-                    .clone()
-                    .or_else(|| DEFAULT_SERVER.map(str::to_owned));
-                if let Some(url) = url {
-                    service::open_browser(&format!("{url}/#/devices"));
-                }
-            } else if id == self.ask.id() {
-                let on = self.ask.is_checked();
-                self.save(dir, |c| c.ask_before_connect = on);
-            } else if id == self.indicator.id() {
-                let on = self.indicator.is_checked();
-                self.save(dir, |c| c.show_indicator = on);
-            } else if id == self.login.id() {
-                let want = self.login.is_checked();
-                let r = if want {
-                    service::install(dir)
-                } else {
-                    service::uninstall()
+            }
+            "setting" => {
+                let on = flag("value");
+                let r = match text("key") {
+                    Some("ask") => crate::update_setting(&self.dir, |c| c.ask_before_connect = on),
+                    Some("indicator") => {
+                        crate::update_setting(&self.dir, |c| c.show_indicator = on)
+                    }
+                    Some("login") if on => service::install(&self.dir),
+                    Some("login") => service::uninstall(),
+                    _ => Ok(()),
                 };
                 if let Err(e) = r {
-                    self.problem = Some(short(&format!("Start at login: {e:#}")));
+                    self.problem = Some(short(&format!("{e:#}")));
                 }
-                self.login.set_checked(service::is_installed());
             }
+            "permission" => open_permission_settings(text("which") == Some("screen")),
+            _ => {}
         }
-        self.refresh();
-        true
+        false
     }
 
-    fn save(&mut self, dir: &std::path::Path, change: impl FnOnce(&mut config::AgentConfig)) {
-        if let Err(e) = crate::update_setting(dir, change) {
-            self.problem = Some(short(&format!("{e:#}")));
-        }
-        if let Ok(Some(c)) = config::load(dir) {
-            self.ask.set_checked(c.ask_before_connect);
-            self.indicator.set_checked(c.show_indicator);
-        }
-    }
-
+    /// Pushes changed state to the page and the tray icon.
     fn refresh(&mut self) {
         let live = crate::status::live();
         let online = crate::status::online();
+        let cfg = config::load(&self.dir).ok().flatten();
+        let permissions = if cfg!(target_os = "macos") {
+            json!({
+                "screen": carson_capture::screen_recording_allowed(false),
+                "accessibility": carson_input::accessibility_allowed(false),
+            })
+        } else {
+            serde_json::Value::Null
+        };
+        let state = json!({
+            "version": env!("CARGO_PKG_VERSION"),
+            "paired": self.paired,
+            "server": self.server,
+            "online": online,
+            "live": live,
+            "problem": self.problem,
+            "busy": self.busy,
+            "code": self.code,
+            "codeOnce": self.code_once,
+            "permissions": permissions,
+            "settings": {
+                "ask": cfg.as_ref().is_some_and(|c| c.ask_before_connect),
+                "indicator": cfg.as_ref().is_some_and(|c| c.show_indicator),
+                "login": service::is_installed(),
+            },
+        })
+        .to_string();
+        if self.page_ready
+            && state != self.last_state
+            && let Some(w) = &self.webview
+        {
+            let _ = w.evaluate_script(&format!("window.glenley && window.glenley.update({state})"));
+            self.last_state = state;
+        }
+
         let look = match (&live, online) {
             (Some(_), _) => Look::Live,
             (None, true) => Look::Online,
             _ => Look::Offline,
         };
-        let status = match (&live, &self.paired) {
-            (Some(label), _) => label.clone(),
-            (None, None) if self.code.is_some() => {
-                format!("Your code: {}", self.code.as_deref().unwrap_or_default())
-            }
-            (None, None) => self
-                .problem
-                .clone()
-                .unwrap_or_else(|| "Not signed in".to_owned()),
-            (None, Some(name)) => match (&self.problem, online) {
-                (Some(p), _) => p.clone(),
-                (None, true) => format!("{name} · online"),
-                (None, false) => format!("{name} · connecting…"),
-            },
+        let status = match (&live, &self.paired, &self.code) {
+            (Some(label), _, _) => label.clone(),
+            (None, None, Some(code)) => format!("Your code: {code}"),
+            (None, None, None) => "Not set up".to_owned(),
+            (None, Some(name), _) if online => format!("{name} · online"),
+            (None, Some(name), _) => format!("{name} · connecting…"),
         };
+        let Some(tray) = &self.tray else { return };
         if status != self.last_status {
-            self.status.set_text(&status);
-            let _ = self.tray.set_tooltip(Some(format!("glenley: {status}")));
+            tray.status.set_text(&status);
+            let _ = tray.icon.set_tooltip(Some(format!("glenley: {status}")));
             self.last_status = status;
         }
-        let signed_in = self.paired.is_some();
-        self.sign_in.set_enabled(!signed_in);
-        self.code_menu.set_enabled(!signed_in);
-        // Say why it's unavailable: a computer belongs to one account at a time.
-        self.code_menu.set_text(if signed_in {
-            "Connect with a code (Remove from account first)"
-        } else {
-            "Connect with a code"
-        });
-        self.copy_code.set_enabled(self.code.is_some());
-        self.sign_out.set_enabled(signed_in);
-        self.ask.set_enabled(signed_in);
-        self.indicator.set_enabled(signed_in);
         if look != self.look {
             // macOS: monochrome template while idle (matches the menu bar); colour when live.
             #[cfg(target_os = "macos")]
             let _ = if look == Look::Live {
-                self.tray.set_icon(Some(icon(look)))
+                tray.icon.set_icon(Some(icon(look)))
             } else {
-                self.tray.set_icon_templated(Some(icon(look)))
+                tray.icon.set_icon_templated(Some(icon(look)))
             };
             #[cfg(not(target_os = "macos"))]
-            let _ = self.tray.set_icon(Some(icon(look)));
+            let _ = tray.icon.set_icon(Some(icon(look)));
             self.look = look;
         }
     }
+}
+
+/// macOS: show a Dock icon only while the window is open.
+fn set_dock_icon(target: &EventLoopWindowTarget<UserEvent>, visible: bool) {
+    #[cfg(target_os = "macos")]
+    {
+        use tao::platform::macos::{ActivationPolicy, EventLoopWindowTargetExtMacOS};
+        target.set_activation_policy_at_runtime(if visible {
+            ActivationPolicy::Regular
+        } else {
+            ActivationPolicy::Accessory
+        });
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (target, visible);
+}
+
+/// macOS: ask for the permission (the system prompt appears once) and open its settings pane.
+fn open_permission_settings(screen: bool) {
+    if screen {
+        carson_capture::screen_recording_allowed(true);
+        service::open_browser(
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+        );
+    } else {
+        carson_input::accessibility_allowed(true);
+        service::open_browser(
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+        );
+    }
+}
+
+/// The window icon (Windows title bar and taskbar): the mark in ink.
+fn window_icon() -> Option<tao::window::Icon> {
+    const N: usize = 32;
+    const MASK: &[u8; N * N] = include_bytes!("../assets/tray-mask-32.alpha");
+    let px = MASK.iter().flat_map(|&a| [0x0E, 0x12, 0x29, a]).collect();
+    tao::window::Icon::from_rgba(px, N as u32, N as u32).ok()
 }
 
 /// The glenley mark at 32×32 (alpha mask), tinted per state. Live: orange; online: teal;
@@ -480,65 +675,4 @@ fn icon(look: Look) -> Icon {
         .flat_map(|&a| [r, g, b, (u16::from(a) * opacity / 255) as u8])
         .collect();
     Icon::from_rgba(px, N as u32, N as u32).expect("valid icon")
-}
-
-/// Pumps native events, calling `tick` about five times a second until it returns false.
-#[cfg(target_os = "macos")]
-fn event_loop(mut tick: impl FnMut() -> bool) -> Result<()> {
-    #![allow(unsafe_code)] // reading one AppKit constant
-    use objc2::MainThreadMarker;
-    use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSEventMask};
-    use objc2_foundation::{NSDate, NSDefaultRunLoopMode};
-
-    let mtm = MainThreadMarker::new().context("the tray must run on the main thread")?;
-    let app = NSApplication::sharedApplication(mtm);
-    // Menu-bar only: no Dock icon, no app menu.
-    app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
-    app.finishLaunching();
-    loop {
-        let until = NSDate::dateWithTimeIntervalSinceNow(0.2);
-        // SAFETY: NSDefaultRunLoopMode is an immutable framework constant.
-        let mode = unsafe { NSDefaultRunLoopMode };
-        while let Some(event) = app.nextEventMatchingMask_untilDate_inMode_dequeue(
-            NSEventMask::Any,
-            Some(&until),
-            mode,
-            true,
-        ) {
-            app.sendEvent(&event);
-            if until.timeIntervalSinceNow() <= 0.0 {
-                break;
-            }
-        }
-        app.updateWindows();
-        if !tick() {
-            return Ok(());
-        }
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn event_loop(mut tick: impl FnMut() -> bool) -> Result<()> {
-    #![allow(unsafe_code)] // Win32 message pump.
-    use windows::Win32::UI::WindowsAndMessaging::{
-        DispatchMessageW, MSG, MsgWaitForMultipleObjects, PM_REMOVE, PeekMessageW, QS_ALLINPUT,
-        TranslateMessage, WM_QUIT,
-    };
-    loop {
-        let mut msg = MSG::default();
-        // SAFETY: standard message pump on the thread that owns the tray icon's window.
-        unsafe {
-            while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
-                if msg.message == WM_QUIT {
-                    return Ok(());
-                }
-                let _ = TranslateMessage(&msg);
-                DispatchMessageW(&msg);
-            }
-            let _ = MsgWaitForMultipleObjects(None, false, 200, QS_ALLINPUT);
-        }
-        if !tick() {
-            return Ok(());
-        }
-    }
 }

@@ -20,6 +20,18 @@ mod windows;
 /// pixels. Must run at process start: monitor bounds measured before it are in scaled
 /// (logical) pixels on 125%/150% displays, which put the remote cursor in the wrong place.
 /// No-op elsewhere.
+/// macOS: whether Accessibility (needed for remote control) is allowed; `prompt` shows the
+/// system dialog the first time. Always true elsewhere.
+pub fn accessibility_allowed(prompt: bool) -> bool {
+    #[cfg(target_os = "macos")]
+    return macos::accessibility_trusted(prompt);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = prompt;
+        true
+    }
+}
+
 pub fn enable_dpi_awareness() {
     #[cfg(target_os = "windows")]
     windows::enable_dpi_awareness();

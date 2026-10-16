@@ -116,6 +116,8 @@ enum Command {
     /// The tray app (default for the `glenley` binary). `server`: where "Sign in" goes.
     App {
         server: Option<String>,
+        /// Start with the window hidden (the login item).
+        background: bool,
     },
     Help,
     Version,
@@ -148,7 +150,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Cli> {
     let (mut service_mode, mut no_browser, mut no_service) = (false, false, false);
     let mut service_action: Option<ServiceAction> = None;
     let mut pin = false;
-    let (mut code_only, mut once) = (false, false);
+    let (mut code_only, mut once, mut background) = (false, false, false);
     fn number<T>(flag: &str, v: String, min: T, max: T) -> Result<T>
     where
         T: std::str::FromStr + PartialOrd + std::fmt::Display,
@@ -261,6 +263,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Cli> {
             }
             "--pin" => pin = true,
             "--code" => code_only = true,
+            "--background" => background = true,
             "--once" => once = true,
             "--log-file" => log_file = Some(PathBuf::from(value("--log-file")?)),
             "--service" => service_mode = true,
@@ -294,7 +297,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Cli> {
             open_browser: !no_browser,
             install_service: !no_service,
         },
-        Some("app") if name.is_none() && !media_flags => Command::App { server },
+        Some("app") if name.is_none() && !media_flags => Command::App { server, background },
         Some(c) if server.is_some() || name.is_some() => {
             bail!("--server/--name only apply to pair, not {c}")
         }
@@ -798,8 +801,8 @@ pub fn main_entry(app_by_default: bool) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    if let Command::App { server } = &cli.command {
-        let server = server.clone();
+    if let Command::App { server, background } = &cli.command {
+        let (server, background) = (server.clone(), *background);
         // The tray owns the main thread (AppKit requires it); the agent runs on a runtime thread.
         let log = cli
             .log_file
@@ -807,10 +810,10 @@ pub fn main_entry(app_by_default: bool) -> ExitCode {
             .unwrap_or_else(|| service::log_path(&dir));
         init_logging(cli.json_logs, Some(&log));
         #[cfg(any(target_os = "macos", target_os = "windows"))]
-        let result = tray::run(dir, server);
+        let result = tray::run(dir, server, background);
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         let result: Result<()> = {
-            let _ = server;
+            let _ = (server, background);
             Err(anyhow::anyhow!(
                 "the tray app is available on macOS and Windows; use `glenley-agent run`"
             ))

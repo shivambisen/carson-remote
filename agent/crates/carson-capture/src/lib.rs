@@ -80,6 +80,33 @@ pub struct DisplayInfo {
 }
 
 /// Lists displays. Needs the same permission as capturing on macOS.
+/// macOS: whether Screen Recording is allowed, without asking (`request`: show the system
+/// prompt). Always true elsewhere.
+#[allow(unsafe_code)]
+pub fn screen_recording_allowed(request: bool) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        #[link(name = "CoreGraphics", kind = "framework")]
+        unsafe extern "C" {
+            fn CGPreflightScreenCaptureAccess() -> bool;
+            fn CGRequestScreenCaptureAccess() -> bool;
+        }
+        // SAFETY: plain CoreGraphics queries with no arguments.
+        unsafe {
+            if request {
+                CGRequestScreenCaptureAccess()
+            } else {
+                CGPreflightScreenCaptureAccess()
+            }
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = request;
+        true
+    }
+}
+
 pub fn displays() -> anyhow::Result<Vec<DisplayInfo>> {
     #[cfg(target_os = "macos")]
     {
