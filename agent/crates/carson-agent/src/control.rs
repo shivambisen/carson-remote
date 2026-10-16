@@ -264,6 +264,7 @@ pub async fn run(
     let mut clip_tx = Some(clip_tx);
     let clipboard = media.clipboard && matches!(media.input, InputMode::Native);
     let mut assembler = ClipboardAssembler::default();
+    let mut abr = crate::abr::Controller::new(media.encoder.bitrate_bps, media.encoder.fps);
 
     // Starts input, clipboard sync and the video; returns the input status for the viewer.
     let mut authorize = |current: usize| -> ControlMessage {
@@ -355,6 +356,27 @@ pub async fn run(
                                         let _ = events.send(SessionEvent::Failed("pin_locked"));
                                     }
                                 }
+                            }
+                            Ok(ControlMessage::ViewerStats { rtt_ms, loss, .. }) if status.is_some() => {
+                                if let Some(q) = abr.update(rtt_ms, loss.clamp(0.0, 1.0)) {
+                                    *pipeline.quality.lock().unwrap_or_else(|e| e.into_inner()) = Some(q);
+                                }
+                                let q = abr.current();
+                                let encoder = (*pipeline.encoder_name.lock().unwrap_or_else(|e| e.into_inner())).to_owned();
+                                send_control(&ctl, &ControlMessage::EncoderStatus {
+                                    encoder,
+                                    bitrate_kbps: q.bitrate_bps / 1000,
+                                    fps: q.fps,
+                                    scale_pct: q.scale_pct,
+                                })
+                                .await;
+                            }
+                            // Clock sync for the viewer's glass-to-glass latency measurement.
+                            Ok(ControlMessage::Ping { t }) => {
+                                let agent_ms = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .map_or(0.0, |d| d.as_secs_f64() * 1000.0);
+                                send_control(&ctl, &ControlMessage::Pong { t, agent_ms }).await;
                             }
                             Ok(ControlMessage::SelectDisplay { index }) if status.is_some() => {
                                 if displays.get(index).is_some() {

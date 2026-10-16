@@ -116,8 +116,7 @@ pub fn screen(opts: &CaptureOptions) -> anyhow::Result<Box<dyn Capturer>> {
 
 /// Nearest-neighbour downscale of tightly packed BGRA (used where the OS cannot scale for
 /// us, e.g. Windows Graphics Capture). GPU scaling replaces this in M7.
-#[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
-pub(crate) fn downscale_bgra(src: &[u8], sw: usize, sh: usize, dw: usize, dh: usize) -> Vec<u8> {
+pub fn downscale_bgra(src: &[u8], sw: usize, sh: usize, dw: usize, dh: usize) -> Vec<u8> {
     let mut out = vec![0u8; dw * dh * 4];
     for y in 0..dh {
         let sy = y * sh / dh;

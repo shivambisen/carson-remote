@@ -252,17 +252,46 @@ pub enum ControlMessage {
         current: usize,
     },
     /// Viewer → agent: switch the streamed display.
-    SelectDisplay { index: usize },
+    SelectDisplay {
+        index: usize,
+    },
     /// Agent → viewer: this host needs its unattended-access PIN before anything is shared.
-    PinRequired { attempts_left: u32 },
+    PinRequired {
+        attempts_left: u32,
+    },
     /// Viewer → agent: the PIN (only ever inside the encrypted data channel).
-    Pin { pin: String },
+    Pin {
+        pin: String,
+    },
     /// Agent → viewer: result of a PIN attempt.
     PinResult {
         ok: bool,
         attempts_left: u32,
         #[serde(default, skip_serializing_if = "is_zero")]
         retry_after_s: u64,
+    },
+    /// Viewer → agent, ~1/s: receive-side network stats for adaptive quality.
+    ViewerStats {
+        #[serde(default)]
+        rtt_ms: Option<u32>,
+        /// Fraction of packets lost since the previous report (0..1).
+        loss: f32,
+        fps: u32,
+    },
+    /// Agent → viewer: what the encoder is doing (stats overlay).
+    EncoderStatus {
+        encoder: String,
+        bitrate_kbps: u32,
+        fps: u32,
+        scale_pct: u32,
+    },
+    /// Clock sync for latency measurement: viewer sends its clock (ms), agent echoes it with its own.
+    Ping {
+        t: f64,
+    },
+    Pong {
+        t: f64,
+        agent_ms: f64,
     },
     /// Agent → viewer: whether input injection works (e.g. missing Accessibility permission).
     InputStatus {

@@ -5,6 +5,7 @@
 import { Backoff } from "./backoff";
 import { ClipboardAssembler, decodeClipboardChunk, encode, type InputMessage } from "./input";
 import { verifyOffer } from "./identity";
+import { ClockSync } from "./latency";
 import { PROTOCOL_VERSION, signalingUrl, type Envelope } from "./signaling";
 
 export interface DisplayDescriptor {
@@ -19,7 +20,8 @@ export type ControlMessage =
   | { type: "displays"; displays: DisplayDescriptor[]; current: number }
   | { type: "input_status"; available: boolean; message?: string }
   | { type: "pin_required"; attempts_left: number }
-  | { type: "pin_result"; ok: boolean; attempts_left: number; retry_after_s?: number };
+  | { type: "pin_result"; ok: boolean; attempts_left: number; retry_after_s?: number }
+  | { type: "encoder_status"; encoder: string; bitrate_kbps: number; fps: number; scale_pct: number };
 
 export interface SessionCallbacks {
   onState: (s: SessionState) => void;
@@ -100,6 +102,10 @@ export class ViewerSession {
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   private restartTimer: ReturnType<typeof setTimeout> | undefined;
   private lostTimer: ReturnType<typeof setTimeout> | undefined;
+  private telemetryTimer: ReturnType<typeof setInterval> | undefined;
+  private lastLoss: { lost: number; received: number } | null = null;
+  /** Agent−viewer clock offset (ms), for glass-to-glass latency. */
+  readonly clock = new ClockSync();
 
   constructor(
     private readonly deviceId: string,
@@ -283,6 +289,7 @@ export class ViewerSession {
       const state = pc.connectionState;
       if (state === "connected") {
         everConnected = true;
+        this.startTelemetry();
         clearTimeout(this.restartTimer);
         clearTimeout(this.lostTimer);
         this.lostTimer = undefined;
@@ -313,10 +320,46 @@ export class ViewerSession {
     };
   }
 
+  /**
+   * Once a second: report receive stats (adaptive quality on the agent) and ping (clock sync).
+   * Runs whether or not the stats overlay is visible.
+   */
+  private startTelemetry(): void {
+    if (this.telemetryTimer !== undefined) return;
+    let tick = 0;
+    this.telemetryTimer = setInterval(() => {
+      if (this.ctl?.readyState !== "open" || !this.pc) return;
+      if (tick++ % 2 === 0) this.ctl.send(JSON.stringify({ type: "ping", t: Date.now() }));
+      void this.pc.getStats().then((report) => {
+        let rtt: number | undefined;
+        let lost = 0;
+        let received = 0;
+        let fps = 0;
+        report.forEach((s: Record<string, unknown>) => {
+          if (s.type === "inbound-rtp" && s.kind === "video") {
+            lost = Number(s.packetsLost ?? 0);
+            received = Number(s.packetsReceived ?? 0);
+            fps = Math.round(Number(s.framesPerSecond ?? 0));
+          }
+          if (s.type === "candidate-pair" && s.state === "succeeded" && s.nominated && typeof s.currentRoundTripTime === "number")
+            rtt = Math.round(s.currentRoundTripTime * 1000);
+        });
+        const prev = this.lastLoss;
+        this.lastLoss = { lost, received };
+        const dLost = prev ? Math.max(0, lost - prev.lost) : 0;
+        const dRecv = prev ? Math.max(0, received - prev.received) : 0;
+        const loss = dLost + dRecv > 0 ? dLost / (dLost + dRecv) : 0;
+        if (this.ctl?.readyState === "open") this.ctl.send(JSON.stringify({ type: "viewer_stats", rtt_ms: rtt ?? null, loss, fps }));
+      });
+    }, 1000);
+  }
+
   private onControlMessage(data: string | ArrayBuffer): void {
     if (typeof data === "string") {
       try {
-        this.callbacks.onControl?.(JSON.parse(data) as ControlMessage);
+        const msg = JSON.parse(data) as ControlMessage | { type: "pong"; t: number; agent_ms: number };
+        if (msg.type === "pong") this.clock.onPong(msg.t, msg.agent_ms, Date.now());
+        else this.callbacks.onControl?.(msg);
       } catch {
         // ignore malformed control text
       }
@@ -334,6 +377,7 @@ export class ViewerSession {
     clearTimeout(this.reconnectTimer);
     clearTimeout(this.restartTimer);
     clearTimeout(this.lostTimer);
+    clearInterval(this.telemetryTimer);
     this.pc?.close();
     this.ws?.close(1000, "session over");
     this.video.srcObject = null;

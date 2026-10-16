@@ -1,6 +1,7 @@
 //! carson-agent: the host-side daemon. Milestone 2 covers enrollment (`pair`) and
 //! presence (`run`); capture, encoding, input and the tray UI arrive in later milestones.
 
+mod abr;
 mod api;
 mod backoff;
 mod config;
@@ -50,6 +51,7 @@ MEDIA OPTIONS:
     --test-pattern         Stream a synthetic pattern instead of the screen (implies --input log)
     --input <MODE>         native (default): control this computer; log: only log input; off: view only
     --no-clipboard         Do not sync the text clipboard
+    --encoder <KIND>       auto (default: hardware when available) or software
 
 OPTIONS:
     --config-dir <DIR>     State directory (default: OS config dir/carson, or $CARSON_AGENT_DIR)
@@ -170,6 +172,14 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Cli> {
                 };
                 input_explicit = true;
                 media.input = mode;
+            }
+            "--encoder" => {
+                media_flags = true;
+                media.encoder_pref = match value("--encoder")?.as_str() {
+                    "auto" => carson_encode::EncoderPreference::Auto,
+                    "software" => carson_encode::EncoderPreference::Software,
+                    other => bail!("unknown encoder {other:?} (use auto or software)"),
+                };
             }
             "--no-clipboard" => {
                 media_flags = true;

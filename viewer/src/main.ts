@@ -6,6 +6,7 @@ import { formatCode, isCompleteCode } from "./pairing";
 import { FrameCoalescer, InputRouter, isViewerShortcut } from "./control";
 import { normalizePoint, wheelPixels } from "./input";
 import { browserPins, checkPin, keyId } from "./identity";
+import { BARCODE_BITS, BARCODE_BLOCK, decodeBarcode, LatencyMeter } from "./latency";
 import { describeReason, ViewerSession, type SessionOptions } from "./session";
 import { PresenceClient, type ConnectionStatus } from "./signaling";
 import { summarize, type StatsSample } from "./stats";
@@ -298,6 +299,26 @@ function showView(deviceId: string, options: SessionOptions = {}): void {
   );
   const statusEl = document.querySelector<HTMLElement>("#view-status")!;
   let inputAvailable = false;
+  let encoderLine = "";
+  // Glass-to-glass latency from the test pattern's timestamp barcode (no-op on real screens).
+  const latency = new LatencyMeter();
+  (window as Window & { carsonLatency?: LatencyMeter }).carsonLatency = latency;
+  const strip = new OffscreenCanvas(BARCODE_BITS * BARCODE_BLOCK, BARCODE_BLOCK);
+  const stripCtx = strip.getContext("2d", { willReadFrequently: true });
+  const onFrame = () => {
+    if (viewing && viewing.session !== session) return; // a newer session took over
+    video.requestVideoFrameCallback(onFrame); // re-arm first: one bad frame must not stop sampling
+    const offset = session.clock.offsetMs;
+    if (!stripCtx || offset === null || video.videoWidth < strip.width) return;
+    try {
+      stripCtx.drawImage(video, 0, 0, strip.width, strip.height, 0, 0, strip.width, strip.height);
+      const stamp = decodeBarcode(stripCtx.getImageData(0, 0, strip.width, strip.height).data, strip.width);
+      if (stamp !== null) latency.add(stamp, Date.now(), offset);
+    } catch {
+      // frame not drawable yet
+    }
+  };
+  if ("requestVideoFrameCallback" in video) video.requestVideoFrameCallback(onFrame);
   let pendingClipboard: string | null = null;
   const showToast = (text: string) => {
     toast.textContent = text;
@@ -361,6 +382,8 @@ function showView(deviceId: string, options: SessionOptions = {}): void {
         } else {
           pinForm.hidden = true; // the session ends with pin_locked
         }
+      } else if (m.type === "encoder_status") {
+        encoderLine = `${m.encoder} · target ${(m.bitrate_kbps / 1000).toFixed(1)} Mbps · ${m.fps} fps · ${m.scale_pct}%`;
       } else if (m.type === "input_status") {
         inputAvailable = m.available;
         controlToggle.disabled = !m.available;
@@ -473,6 +496,8 @@ function showView(deviceId: string, options: SessionOptions = {}): void {
         `RTT ${st.rttMs ?? "–"} ms · jitter buf ${st.jitterBufferMs ?? "–"} ms\n` +
         `decode ${st.decodeMs ?? "–"} ms · lost ${st.packetsLost}\n` +
         `path ${st.path} (${st.candidateType})\n` +
+        (encoderLine ? `${encoderLine}\n` : "") +
+        (latency.count > 0 ? `glass-to-glass p50 ${Math.round(latency.percentile(50) ?? 0)} ms · p95 ${Math.round(latency.percentile(95) ?? 0)} ms (${latency.count})\n` : "") +
         `input ${controlling() ? "on" : "off"}`;
     });
   }, 1000);
