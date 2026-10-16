@@ -438,6 +438,12 @@ impl Ui {
         let signed_in = self.paired.is_some();
         self.sign_in.set_enabled(!signed_in);
         self.code_menu.set_enabled(!signed_in);
+        // Say why it's unavailable: a computer belongs to one account at a time.
+        self.code_menu.set_text(if signed_in {
+            "Connect with a code (Remove from account first)"
+        } else {
+            "Connect with a code"
+        });
         self.copy_code.set_enabled(self.code.is_some());
         self.sign_out.set_enabled(signed_in);
         self.ask.set_enabled(signed_in);
