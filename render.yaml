@@ -19,7 +19,7 @@ services:
       - key: CARSON_DEV
         value: "false"
       - key: CARSON_PUBLIC_URL
-        value: https://remote.glenley.in
+        value: https://app.glenley.in
       - key: CARSON_TRUST_PROXY
         value: "true"
       - key: CARSON_TURN_SECRET
