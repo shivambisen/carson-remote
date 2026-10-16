@@ -143,11 +143,13 @@ pub fn scaled_size(width: usize, height: usize, max_width: usize) -> (usize, usi
 
 /// Holds the newest frame; producers overwrite, the consumer takes.
 #[derive(Default)]
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))] // no Linux capture yet
 pub(crate) struct FrameSlot {
     frame: Mutex<Option<Frame>>,
     ready: Condvar,
 }
 
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
 impl FrameSlot {
     pub(crate) fn put(&self, frame: Frame) {
         *self.frame.lock().unwrap_or_else(|e| e.into_inner()) = Some(frame);

@@ -122,6 +122,9 @@ func (h *Handler) serveViewer(w http.ResponseWriter, r *http.Request) {
 	defer h.detachAll(c)
 
 	go h.writeLoop(ctx, conn, c)
+	// Viewers get pings too: reverse proxies (Cloudflare, many load balancers) close WebSockets
+	// that are idle for ~100 s, which would drop the viewer between sessions.
+	go h.heartbeat(ctx, conn, c)
 	h.readLoop(ctx, conn, c, func(env protocol.Envelope) {
 		h.handleViewerSession(c, viewer, env)
 	})
@@ -260,7 +263,8 @@ func (h *Handler) writeLoop(ctx context.Context, conn *websocket.Conn, c *client
 	}
 }
 
-// heartbeat pings the agent; a missed pong marks it offline. Successful pings refresh last_seen.
+// heartbeat pings the client; a missed pong closes the connection (for an agent, that marks it
+// offline). For agents, successful pings refresh last_seen.
 func (h *Handler) heartbeat(ctx context.Context, conn *websocket.Conn, c *client) {
 	t := time.NewTicker(h.PingInterval)
 	defer t.Stop()
@@ -276,7 +280,9 @@ func (h *Handler) heartbeat(ctx context.Context, conn *websocket.Conn, c *client
 				c.close("heartbeat timeout")
 				return
 			}
-			h.touch(c.deviceID, "", "")
+			if c.deviceID != "" {
+				h.touch(c.deviceID, "", "")
+			}
 		}
 	}
 }

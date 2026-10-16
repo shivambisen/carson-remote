@@ -273,6 +273,33 @@ func TestMissedHeartbeatMarksOffline(t *testing.T) {
 	}
 }
 
+// Viewers are pinged too, so proxies that close idle WebSockets (Cloudflare: ~100 s) don't
+// drop them, and a viewer that stops answering is cleaned up.
+func TestViewerIsPingedAndDeadViewerIsClosed(t *testing.T) {
+	e := newEnv(t)
+	_, cookie := e.session(t, "ana@x.com")
+	live, _, err := e.dialViewer(t, cookie, e.srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	read(t, live)                                                    // hello.ok
+	keepReading(live)                                                // reading answers pings
+	if _, _, err := e.dialViewer(t, cookie, e.srv.URL); err != nil { // never reads
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for e.hub.viewerCount() != 1 {
+		if time.Now().After(deadline) {
+			t.Fatalf("viewers = %d, want only the live one left", e.hub.viewerCount())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	time.Sleep(300 * time.Millisecond) // several ping intervals
+	if n := e.hub.viewerCount(); n != 1 {
+		t.Fatalf("live viewer was dropped (viewers = %d)", n)
+	}
+}
+
 func TestReconnectReplacesOldAgentWithoutFlapping(t *testing.T) {
 	e := newEnv(t)
 	u, cookie := e.session(t, "ana@x.com")
@@ -345,4 +372,15 @@ func TestMalformedMessageClosesConnection(t *testing.T) {
 	if !errors.As(err, &ce) {
 		t.Fatalf("expected close error, got %v", err)
 	}
+}
+
+// viewerCount returns the number of connected viewers across all users.
+func (h *Hub) viewerCount() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	n := 0
+	for _, set := range h.viewers {
+		n += len(set)
+	}
+	return n
 }

@@ -114,6 +114,7 @@ pub fn nal_types(annexb: &[u8]) -> Vec<u8> {
 }
 
 /// Converts AVCC (4-byte big-endian length prefixes) to Annex B start codes.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))] // used by VideoToolbox
 pub(crate) fn avcc_to_annexb(avcc: &[u8], out: &mut Vec<u8>) -> anyhow::Result<()> {
     let mut i = 0;
     while i < avcc.len() {
