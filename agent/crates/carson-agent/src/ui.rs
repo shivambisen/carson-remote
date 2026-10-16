@@ -30,6 +30,8 @@ pub enum Consent {
 fn helper(args: &[&str]) -> Result<Command> {
     let exe = std::env::current_exe().context("locate glenley-agent executable")?;
     let mut cmd = Command::new(exe);
+    #[cfg(windows)]
+    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW: never flash a console
     cmd.arg("ui")
         .args(args)
         .stdin(Stdio::piped())

@@ -401,6 +401,11 @@ struct App {
     look: Look,
     last_state: String,
     last_status: String,
+    /// Cached, refreshed only when they can change: checking them runs programs (schtasks,
+    /// launchctl) and reads files, which must not happen on every UI tick.
+    login: bool,
+    ask: bool,
+    indicator: bool,
 }
 
 impl App {
@@ -412,7 +417,7 @@ impl App {
         cmds: tokio::sync::mpsc::UnboundedSender<Cmd>,
     ) -> Self {
         let server = server.or_else(|| config::load(&dir).ok().flatten().map(|c| c.server_url));
-        Self {
+        let mut app = Self {
             dir,
             server,
             window,
@@ -428,7 +433,20 @@ impl App {
             look: Look::Offline,
             last_state: String::new(),
             last_status: String::new(),
-        }
+            login: false,
+            ask: false,
+            indicator: false,
+        };
+        app.reload_settings();
+        app
+    }
+
+    /// Re-reads the settings file and the login-item state (runs a helper program).
+    fn reload_settings(&mut self) {
+        let cfg = config::load(&self.dir).ok().flatten();
+        self.ask = cfg.as_ref().is_some_and(|c| c.ask_before_connect);
+        self.indicator = cfg.as_ref().is_some_and(|c| c.show_indicator);
+        self.login = service::is_installed();
     }
 
     fn show(&mut self, target: &EventLoopWindowTarget<UserEvent>) {
@@ -468,13 +486,14 @@ impl App {
                         .or(self.server.take());
                     // Just set up from this window: start at login from now on (untick to opt out).
                     if self.busy.is_some()
-                        && !service::is_installed()
+                        && !self.login
                         && let Err(e) = service::install(&self.dir)
                     {
                         self.problem = Some(short(&format!("Start at login: {e:#}")));
                     }
                 }
                 self.paired = name;
+                self.reload_settings();
             }
             Note::Problem(p) => self.problem = p,
             Note::Busy(b) => self.busy = b,
@@ -541,6 +560,7 @@ impl App {
                 if let Err(e) = r {
                     self.problem = Some(short(&format!("{e:#}")));
                 }
+                self.reload_settings();
             }
             "permission" => open_permission_settings(text("which") == Some("screen")),
             _ => {}
@@ -552,7 +572,6 @@ impl App {
     fn refresh(&mut self) {
         let live = crate::status::live();
         let online = crate::status::online();
-        let cfg = config::load(&self.dir).ok().flatten();
         let permissions = if cfg!(target_os = "macos") {
             json!({
                 "screen": carson_capture::screen_recording_allowed(false),
@@ -573,9 +592,9 @@ impl App {
             "codeOnce": self.code_once,
             "permissions": permissions,
             "settings": {
-                "ask": cfg.as_ref().is_some_and(|c| c.ask_before_connect),
-                "indicator": cfg.as_ref().is_some_and(|c| c.show_indicator),
-                "login": service::is_installed(),
+                "ask": self.ask,
+                "indicator": self.indicator,
+                "login": self.login,
             },
         })
         .to_string();

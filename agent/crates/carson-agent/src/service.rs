@@ -17,6 +17,20 @@ use anyhow::{Context, Result, bail};
 
 pub const LABEL: &str = "in.glenley.agent";
 
+/// A helper program started without a console window. On Windows the app is a GUI program, so
+/// every console tool it runs (schtasks, rundll32) would otherwise flash a terminal window.
+fn quiet(program: &str) -> Command {
+    #[allow(unused_mut)]
+    let mut cmd = Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
 /// Where the service writes its log.
 pub fn log_path(dir: &Path) -> PathBuf {
     dir.join("agent.log")
@@ -143,20 +157,20 @@ pub fn is_installed() -> bool {
 fn remove_legacy() {
     #[cfg(target_os = "macos")]
     if let (Ok(uid), Some(home)) = (unsafe_free_uid(), dirs::home_dir()) {
-        let _ = Command::new("launchctl")
+        let _ = quiet("launchctl")
             .args(["bootout", &format!("gui/{uid}/com.carson.agent")])
             .output();
         let _ = std::fs::remove_file(home.join("Library/LaunchAgents/com.carson.agent.plist"));
     }
     #[cfg(target_os = "windows")]
     {
-        let _ = Command::new("schtasks")
+        let _ = quiet("schtasks")
             .args(["/Delete", "/TN", "carson-agent", "/F"])
             .output();
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        let _ = Command::new("systemctl")
+        let _ = quiet("systemctl")
             .args(["--user", "disable", "--now", "carson-agent"])
             .output();
     }
@@ -171,11 +185,11 @@ pub fn install(config_dir: &Path) -> Result<()> {
         std::fs::create_dir_all(path.parent().expect("has parent"))?;
         let uid = unsafe_free_uid()?;
         // Replace any previous version cleanly.
-        let _ = Command::new("launchctl")
+        let _ = quiet("launchctl")
             .args(["bootout", &format!("gui/{uid}/{LABEL}")])
             .output();
         std::fs::write(&path, launch_agent_plist(&launch, config_dir))?;
-        run(Command::new("launchctl")
+        run(quiet("launchctl")
             .args(["bootstrap", &format!("gui/{uid}")])
             .arg(&path))?;
         println!(
@@ -193,7 +207,7 @@ pub fn install(config_dir: &Path) -> Result<()> {
             log_path(config_dir).display(),
             launch.args.join(" ")
         );
-        run(Command::new("schtasks").args([
+        run(quiet("schtasks").args([
             "/Create",
             "/TN",
             "glenley-agent",
@@ -205,7 +219,7 @@ pub fn install(config_dir: &Path) -> Result<()> {
             "/TR",
             &tr,
         ]))?;
-        run(Command::new("schtasks").args(["/Run", "/TN", "glenley-agent"]))?;
+        run(quiet("schtasks").args(["/Run", "/TN", "glenley-agent"]))?;
         println!(
             "Installed scheduled task \"glenley-agent\" (starts at logon; log: {}).",
             log_path(config_dir).display()
@@ -219,8 +233,8 @@ pub fn install(config_dir: &Path) -> Result<()> {
         std::fs::create_dir_all(&unit_dir)?;
         let unit = unit_dir.join("glenley-agent.service");
         std::fs::write(&unit, systemd_unit(&launch, config_dir))?;
-        run(Command::new("systemctl").args(["--user", "daemon-reload"]))?;
-        run(Command::new("systemctl").args(["--user", "enable", "--now", "glenley-agent"]))?;
+        run(quiet("systemctl").args(["--user", "daemon-reload"]))?;
+        run(quiet("systemctl").args(["--user", "enable", "--now", "glenley-agent"]))?;
         println!(
             "Installed {} (log: {}).",
             unit.display(),
@@ -235,7 +249,7 @@ pub fn uninstall() -> Result<()> {
     #[cfg(target_os = "macos")]
     {
         let uid = unsafe_free_uid()?;
-        let _ = Command::new("launchctl")
+        let _ = quiet("launchctl")
             .args(["bootout", &format!("gui/{uid}/{LABEL}")])
             .output();
         let path = plist_path()?;
@@ -245,16 +259,16 @@ pub fn uninstall() -> Result<()> {
     }
     #[cfg(target_os = "windows")]
     {
-        let _ = Command::new("schtasks")
+        let _ = quiet("schtasks")
             .args(["/End", "/TN", "glenley-agent"])
             .output();
-        let _ = Command::new("schtasks")
+        let _ = quiet("schtasks")
             .args(["/Delete", "/TN", "glenley-agent", "/F"])
             .output();
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        let _ = Command::new("systemctl")
+        let _ = quiet("systemctl")
             .args(["--user", "disable", "--now", "glenley-agent"])
             .output();
         if let Some(unit) = dirs::config_dir().map(|d| d.join("systemd/user/glenley-agent.service"))
@@ -275,7 +289,7 @@ pub fn status() -> String {
         let Ok(uid) = unsafe_free_uid() else {
             return "unknown".into();
         };
-        match Command::new("launchctl")
+        match quiet("launchctl")
             .args(["print", &format!("gui/{uid}/{LABEL}")])
             .output()
         {
@@ -292,7 +306,7 @@ pub fn status() -> String {
     }
     #[cfg(target_os = "windows")]
     {
-        match Command::new("schtasks")
+        match quiet("schtasks")
             .args(["/Query", "/TN", "glenley-agent"])
             .output()
         {
@@ -308,7 +322,7 @@ pub fn status() -> String {
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        match Command::new("systemctl")
+        match quiet("systemctl")
             .args(["--user", "is-active", "glenley-agent"])
             .output()
         {
@@ -322,7 +336,7 @@ pub fn status() -> String {
 /// The current user's numeric id, via `id -u` (avoids libc FFI).
 #[cfg(target_os = "macos")]
 fn unsafe_free_uid() -> Result<String> {
-    let out = Command::new("id").arg("-u").output().context("run id -u")?;
+    let out = quiet("id").arg("-u").output().context("run id -u")?;
     let uid = String::from_utf8_lossy(&out.stdout).trim().to_owned();
     if uid.is_empty() || !uid.bytes().all(|b| b.is_ascii_digit()) {
         bail!("could not determine user id");
@@ -333,13 +347,13 @@ fn unsafe_free_uid() -> Result<String> {
 /// Opens a URL in the default browser (best effort).
 pub fn open_browser(url: &str) -> bool {
     #[cfg(target_os = "macos")]
-    let r = Command::new("open").arg(url).status();
+    let r = quiet("open").arg(url).status();
     #[cfg(target_os = "windows")]
-    let r = Command::new("rundll32")
+    let r = quiet("rundll32")
         .args(["url.dll,FileProtocolHandler", url])
         .status();
     #[cfg(all(unix, not(target_os = "macos")))]
-    let r = Command::new("xdg-open").arg(url).status();
+    let r = quiet("xdg-open").arg(url).status();
     r.is_ok_and(|s| s.success())
 }
 
