@@ -57,6 +57,12 @@ carson-agent unattended off        # back to Allow/Deny prompts
 The PIN is checked on the host, inside the encrypted connection, and stored only as an
 Argon2id hash. The banner still appears in unattended mode.
 
+**Networks:** connections are direct when possible and fall back to the TURN relay (coturn)
+on strict NATs and firewalls. Set `CARSON_TURN_SECRET` (shared with coturn) and `CARSON_TURN_URLS`;
+the server hands each session time-limited credentials. Add `?relay=1` to a view URL to force the
+relay (diagnostics). Brief network drops are survived: signaling reconnects and resumes the
+session for up to 30 s, and the media path restarts ICE automatically.
+
 **macOS permissions:** grant the app that runs the agent (e.g. Terminal) **Screen Recording**
 and **Accessibility** (for control) in System Settings → Privacy & Security, then restart it.
 Without Accessibility the viewer shows "view only".
@@ -84,4 +90,4 @@ scripts/e2e-pairing.sh   # real server + real agent: pair, online, offline
 
 ## Status
 
-Milestones 1–4 are done: sign-in, pairing, presence, screen share, and remote control (mouse, keyboard, scroll, text clipboard, monitor switching) on macOS hosts. Windows capture/input is implemented but so far only compile-checked. Next: M5, NAT traversal and reconnects. See the milestone table in the design doc.
+Milestones 1–4 are done: sign-in, pairing, presence, screen share, and remote control (mouse, keyboard, scroll, text clipboard, monitor switching) on macOS hosts. Windows capture/input is implemented but so far only compile-checked. M5 (TURN relay, ICE restart, 30 s resume) is done, along with the consent part of M6. Next: the rest of M6 (audit log, revoke, rate limits). See the milestone table in the design doc.

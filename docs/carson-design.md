@@ -277,6 +277,14 @@ Viewer: `vite`, `typescript`, `vitest`. Nothing else at runtime.
 - Verified: PIN gate end to end in a webrtc-rs loopback test (no frames or input before the PIN, wrong-PIN countdown, unlock) and in Chrome (PIN keystrokes are not forwarded). Banner and prompt helpers start and stay up on macOS. Windows UI is compile- and clippy-checked only.
 - Still to do in M6: audit log, revoke device, server-side rate-limit review, DTLS fingerprint signing. Linux has no prompt or banner yet, so attended sessions there are refused.
 
+**M5:**
+- TURN: `turn.creds` carries STUN plus TURN credentials in coturn's REST-API scheme: username `<expiry>:<sid>`, credential `base64(HMAC-SHA1(secret, username))`. The TTL defaults to **6 h** (`CARSON_TURN_TTL`), not the 10 min planned in §6, because TURN allocations are refreshed with the same credentials throughout a session. A leaked credential only allows relaying until it expires, through coturn's denied-peer filters. A Go test checks the credential against an independent Python HMAC vector.
+- Relay fallback is plain ICE priority (direct first). `?relay=1` on a view URL forces `iceTransportPolicy: "relay"` for diagnostics.
+- Session resume: a dropped party's side is **detached**, not ended. It may re-attach within 30 s with `session.resume {token}`, using the per-party token from `turn.creds`, from the same account (viewer) or device (agent). Otherwise the other side gets `session.end peer_disconnected`. The device counts as busy while its session awaits resume. Media keeps flowing P2P during a signaling outage. Sessions do not survive a server restart (in-memory hub); clients see `resume_failed`.
+- ICE restart: the agent (offerer) restarts after 2 s of `disconnected`, immediately on `failed` or on `session.ice_restart` from the viewer, at most every 2 s, and after a signaling reconnect if media is down. After 30 s without media the session ends (`connection_lost`). A keyframe is forced on recovery. Data channels and DTLS survive restarts.
+- Verified: Go tests for credentials, resume (wrong token, stolen token from another account, wrong side's token, expiry, busy) and ICE-restart relay. Rust loopback test: a restart via viewer request and via simulated failure renegotiates with a new ufrag and keeps streaming. Chrome against a local coturn: forced-relay session at 30 fps on path `relay→host`; viewer WebSocket killed mid-session → auto-reconnect and `session resumed`, video uninterrupted; ICE restart over the relay → new ufrag, recovered.
+- **Known:** video stalls for about 1.5 s during an ICE restart (webrtc-rs pauses media while re-checking), to tune in M7. Agent-side signaling loss is covered by tests but has not been exercised live. No netem/packet-loss tests yet.
+
 ## 18. Future work (not in M1–M8)
 
 LAN-only serverless mode (mDNS), file transfer, audio, multi-viewer, a desktop viewer app, mobile viewer,
