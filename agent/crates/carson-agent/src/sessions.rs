@@ -12,6 +12,7 @@ use carson_proto::ViewerInfo;
 
 use crate::consent::{AccessPolicy, CONSENT_TIMEOUT, PinGuard};
 use crate::control::PinGate;
+use crate::identity::DeviceKey;
 use crate::media::{InputMode, MediaOptions, Source, open_source};
 use crate::peer::{Outbox, SessionConfig, SessionEvent, run_session, send};
 use crate::ui::{self, Consent};
@@ -20,6 +21,7 @@ pub struct Sessions {
     out: Outbox,
     media: MediaOptions,
     policy: AccessPolicy,
+    signer: Arc<DeviceKey>,
     /// Failed-PIN counter shared by all sessions (lockout survives reconnects).
     pins: Arc<Mutex<PinGuard>>,
     /// ICE servers announced via `turn.creds`, keyed by session, until the request arrives.
@@ -30,10 +32,16 @@ pub struct Sessions {
 }
 
 impl Sessions {
-    pub fn new(out: Outbox, media: MediaOptions, policy: AccessPolicy) -> Self {
+    pub fn new(
+        out: Outbox,
+        media: MediaOptions,
+        policy: AccessPolicy,
+        signer: Arc<DeviceKey>,
+    ) -> Self {
         Self {
             out,
             media,
+            signer,
             policy,
             pins: Arc::default(),
             pending_ice: HashMap::new(),
@@ -196,6 +204,7 @@ impl Sessions {
         let (tx, rx) = mpsc::unbounded_channel();
         self.active.insert(sid.clone(), tx.clone());
         let (out, media, policy) = (self.out.clone(), self.media.clone(), self.policy.clone());
+        let signer = Arc::clone(&self.signer);
         tokio::spawn(async move {
             if policy == AccessPolicy::Attended {
                 let title = format!("Allow remote {verb}?");
@@ -268,6 +277,7 @@ impl Sessions {
                 media.source == Source::TestPattern && !matches!(media.input, InputMode::Native);
             let banner = (!synthetic).then(|| banner_text(&viewer, controlling));
             let cfg = SessionConfig {
+                signer,
                 sid,
                 ice_servers: ice,
                 media,
@@ -333,7 +343,12 @@ mod tests {
     #[test]
     fn reconnect_resumes_running_sessions_and_drops_refused_ones() {
         let (out, mut out_rx) = mpsc::unbounded_channel();
-        let mut sessions = Sessions::new(out, MediaOptions::default(), AccessPolicy::Attended);
+        let mut sessions = Sessions::new(
+            out,
+            MediaOptions::default(),
+            AccessPolicy::Attended,
+            Arc::new(DeviceKey::generate().unwrap()),
+        );
         sessions.handle(env(
             MessageType::TurnCreds,
             "ses_a",

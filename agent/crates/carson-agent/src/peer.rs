@@ -78,6 +78,24 @@ pub struct SessionConfig {
     pub gate: Option<crate::control::PinGate>,
     /// "Being controlled" banner text. `None` only when nothing real is shared (test pattern).
     pub banner: Option<String>,
+    /// Device key: signs each offer's DTLS fingerprint so the viewer can verify, end to end,
+    /// that media terminates at this device (not at a man in the middle, even the server).
+    pub signer: Arc<crate::identity::DeviceKey>,
+}
+
+/// Sends an offer with its signed DTLS fingerprint (`carson_sig`, see proto/dtls-binding.json).
+fn send_offer(
+    out: &Outbox,
+    sid: &str,
+    offer: &RTCSessionDescription,
+    signer: &crate::identity::DeviceKey,
+) -> Result<()> {
+    let fingerprint =
+        carson_proto::sdp_fingerprint(&offer.sdp).context("offer has no DTLS fingerprint")?;
+    let mut body = serde_json::to_value(offer)?;
+    body["carson_sig"] = serde_json::Value::String(signer.sign_dtls(sid, &fingerprint));
+    send(out, MessageType::SdpOffer, sid, body);
+    Ok(())
 }
 
 /// H.264 Constrained Baseline, which every browser decodes (often in hardware).
@@ -168,7 +186,12 @@ const MEDIA_LOSS_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Restarts ICE: new credentials and candidates, renegotiated with a fresh offer.
 /// Media, DTLS and data channels continue on the new path.
-async fn restart_ice(pc: &Arc<dyn PeerConnection>, out: &Outbox, sid: &str) -> Result<bool> {
+async fn restart_ice(
+    pc: &Arc<dyn PeerConnection>,
+    out: &Outbox,
+    sid: &str,
+    signer: &crate::identity::DeviceKey,
+) -> Result<bool> {
     if pc.pending_local_description().await.is_some() {
         tracing::debug!(sid, "offer already pending; skipping ICE restart");
         return Ok(false);
@@ -176,7 +199,7 @@ async fn restart_ice(pc: &Arc<dyn PeerConnection>, out: &Outbox, sid: &str) -> R
     pc.restart_ice().await?;
     let offer = pc.create_offer(None).await?;
     pc.set_local_description(offer.clone()).await?;
-    send(out, MessageType::SdpOffer, sid, &offer);
+    send_offer(out, sid, &offer, signer)?;
     tracing::info!(sid, "ICE restart offered");
     Ok(true)
 }
@@ -274,7 +297,7 @@ async fn session_inner(
 
     let offer = pc.create_offer(None).await?;
     pc.set_local_description(offer.clone()).await?;
-    send(out, MessageType::SdpOffer, sid, &offer);
+    send_offer(out, sid, &offer, &cfg.signer)?;
 
     let mut capturer = Some(capturer);
     let mut streaming: Option<tokio::task::JoinHandle<()>> = None;
@@ -352,7 +375,7 @@ async fn session_inner(
                     .reset(tokio::time::Instant::now() + ICE_RESTART_MIN_INTERVAL);
                 continue;
             }
-            match restart_ice(&pc, out, sid).await {
+            match restart_ice(&pc, out, sid, &cfg.signer).await {
                 Ok(true) => last_restart = Some(Instant::now()),
                 Ok(false) => {}
                 Err(e) => tracing::warn!(sid, error = %e, "ICE restart failed"),
@@ -574,6 +597,7 @@ mod tests {
             media,
             gate: None,
             banner: None,
+            signer: Arc::new(crate::identity::DeviceKey::generate().unwrap()),
         };
         let session = tokio::spawn(run_session(cfg, capturer, out_tx, ev_tx.clone(), ev_rx));
 
@@ -826,6 +850,7 @@ mod tests {
             media,
             gate: Some(gate),
             banner: None,
+            signer: Arc::new(crate::identity::DeviceKey::generate().unwrap()),
         };
         let session = tokio::spawn(run_session(cfg, capturer, out_tx, ev_tx.clone(), ev_rx));
 
@@ -991,6 +1016,7 @@ mod tests {
             media,
             gate: None,
             banner: None,
+            signer: Arc::new(crate::identity::DeviceKey::generate().unwrap()),
         };
         let session = tokio::spawn(run_session(cfg, capturer, out_tx, ev_tx.clone(), ev_rx));
 
@@ -1057,5 +1083,47 @@ mod tests {
             .expect("session did not stop")
             .unwrap();
         let _ = viewer.close().await;
+    }
+
+    #[test]
+    fn offers_carry_a_verifiable_dtls_binding() {
+        use base64::Engine;
+        use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+        let v: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../proto/dtls-binding.json")).unwrap();
+        let offer: RTCSessionDescription =
+            serde_json::from_value(serde_json::json!({"type": "offer", "sdp": v["sdp"]})).unwrap();
+        let key = crate::identity::DeviceKey::generate().unwrap();
+        let (out, mut rx) = mpsc::unbounded_channel();
+        send_offer(&out, "ses_x", &offer, &key).unwrap();
+        let env = rx.try_recv().unwrap();
+        assert_eq!(env.body["type"], "offer");
+        assert_eq!(
+            env.body["sdp"], v["sdp"],
+            "SDP must be passed through untouched"
+        );
+
+        let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        let sig = Signature::from_slice(
+            &b64.decode(env.body["carson_sig"].as_str().unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        let pk: [u8; 32] = b64
+            .decode(key.public_key_b64())
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let vk = VerifyingKey::from_bytes(&pk).unwrap();
+        let fp = v["fingerprint"].as_str().unwrap();
+        assert!(
+            vk.verify(&carson_proto::dtls_binding_message("ses_x", fp), &sig)
+                .is_ok()
+        );
+        assert!(
+            vk.verify(&carson_proto::dtls_binding_message("ses_other", fp), &sig)
+                .is_err(),
+            "bound to the session"
+        );
     }
 }

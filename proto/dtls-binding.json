@@ -1,0 +1,10 @@
+{
+  "description": "DTLS identity binding: the agent signs (Ed25519, device key) message = \"carson-dtls:v1\\n\" + sid + \"\\n\" + fingerprint, where fingerprint is the first a=fingerprint value of its offer, normalized to lowercase algorithm + space + uppercase colon-separated hex. Signature is base64url without padding, sent as `carson_sig` next to {type, sdp}.",
+  "fingerprint": "sha-256 0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9:0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9",
+  "message": "carson-dtls:v1\nses_fixture00000000000000000000\nsha-256 0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9:0A:1B:2C:3D:4E:5F:60:71:82:93:A4:B5:C6:D7:E8:F9",
+  "public_key": "ebVWLo_mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ",
+  "sdp": "v=0\r\no=- 1 2 IN IP4 0.0.0.0\r\ns=-\r\nt=0 0\r\na=fingerprint:SHA-256 0a:1b:2c:3d:4e:5f:60:71:82:93:a4:b5:c6:d7:e8:f9:0a:1b:2c:3d:4e:5f:60:71:82:93:a4:b5:c6:d7:e8:f9\r\nm=video 9 UDP/TLS/RTP/SAVPF 102\r\n",
+  "seed_hex": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+  "sid": "ses_fixture00000000000000000000",
+  "signature": "ZYA8iVO5bvEf25drpSiilWGzVuteVhkGzow66xPXiTGRBNZbL1m58nl-Oz5dnLrVn_jZZBa1_InLGGqiYCpMDQ"
+}

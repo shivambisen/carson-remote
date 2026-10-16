@@ -162,6 +162,26 @@ pub fn device_auth_message(device_id: &str, nonce: &str) -> Vec<u8> {
     format!("carson-device-auth:v1\n{device_id}\n{nonce}").into_bytes()
 }
 
+/// First `a=fingerprint` of an SDP, normalized: lowercase algorithm, space, uppercase hex
+/// (`sha-256 AB:CD:…`). The viewer extracts it the same way (see `proto/dtls-binding.json`).
+pub fn sdp_fingerprint(sdp: &str) -> Option<String> {
+    let value = sdp
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("a=fingerprint:"))?;
+    let (algo, hex) = value.trim().split_once(' ')?;
+    Some(format!(
+        "{} {}",
+        algo.to_ascii_lowercase(),
+        hex.trim().to_ascii_uppercase()
+    ))
+}
+
+/// The bytes an agent signs to bind its DTLS certificate (by fingerprint) to its device key
+/// for one session, so a viewer can tell the media really terminates at that device.
+pub fn dtls_binding_message(sid: &str, fingerprint: &str) -> Vec<u8> {
+    format!("carson-dtls:v1\n{sid}\n{fingerprint}").into_bytes()
+}
+
 /// The platform name used on the wire (`macos`, `windows`, `linux`).
 pub const fn current_os() -> &'static str {
     if cfg!(target_os = "macos") {
@@ -234,6 +254,19 @@ mod tests {
         // Unknown future types still parse; callers decide to ignore them.
         let future: Envelope = serde_json::from_str(r#"{"v":1,"type":"x.new"}"#).unwrap();
         assert_eq!(future.message_type(), None);
+    }
+
+    #[test]
+    fn dtls_binding_matches_fixture() {
+        let v: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../proto/dtls-binding.json")).unwrap();
+        let fp = sdp_fingerprint(v["sdp"].as_str().unwrap()).unwrap();
+        assert_eq!(fp, v["fingerprint"].as_str().unwrap());
+        assert_eq!(
+            dtls_binding_message(v["sid"].as_str().unwrap(), &fp),
+            v["message"].as_str().unwrap().as_bytes()
+        );
+        assert_eq!(sdp_fingerprint("v=0\r\ns=-\r\n"), None);
     }
 
     #[test]

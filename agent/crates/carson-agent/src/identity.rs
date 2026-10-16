@@ -34,6 +34,17 @@ impl DeviceKey {
         URL_SAFE_NO_PAD.encode(self.signing.verifying_key().as_bytes())
     }
 
+    /// Signs this session's DTLS fingerprint (see `proto/dtls-binding.json`).
+    pub fn sign_dtls(&self, sid: &str, fingerprint: &str) -> String {
+        let msg = carson_proto::dtls_binding_message(sid, fingerprint);
+        URL_SAFE_NO_PAD.encode(self.signing.sign(&msg).to_bytes())
+    }
+
+    /// Short, human-comparable identity of the public key (shown by `status` and the viewer).
+    pub fn key_id(&self) -> String {
+        key_id(self.signing.verifying_key().as_bytes())
+    }
+
     /// Signs the server's challenge for `device_id` (see `proto/device-auth.json`).
     pub fn sign_auth(&self, device_id: &str, nonce: &str) -> String {
         let msg = carson_proto::device_auth_message(device_id, nonce);
@@ -41,9 +52,55 @@ impl DeviceKey {
     }
 }
 
+/// The first 16 base64url characters (96 bits) of the public key, grouped in fours, for
+/// comparing a device's identity by eye. The viewer shows the same string.
+fn key_id(public_key: &[u8]) -> String {
+    let b64 = URL_SAFE_NO_PAD.encode(public_key);
+    b64.chars()
+        .take(16)
+        .collect::<Vec<_>>()
+        .chunks(4)
+        .map(|c| c.iter().collect::<String>())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn key_id_is_grouped_prefix_of_public_key() {
+        let v: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../proto/dtls-binding.json")).unwrap();
+        let pk = v["public_key"].as_str().unwrap();
+        let want = format!("{}-{}-{}-{}", &pk[0..4], &pk[4..8], &pk[8..12], &pk[12..16]);
+        let hex = v["seed_hex"].as_str().unwrap();
+        let mut seed = [0u8; 32];
+        for (i, b) in seed.iter_mut().enumerate() {
+            *b = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).unwrap();
+        }
+        assert_eq!(DeviceKey::from_seed(&seed).key_id(), want);
+    }
+
+    #[test]
+    fn dtls_signature_matches_fixture() {
+        let v: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../proto/dtls-binding.json")).unwrap();
+        let hex = v["seed_hex"].as_str().unwrap();
+        let mut seed = [0u8; 32];
+        for (i, b) in seed.iter_mut().enumerate() {
+            *b = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).unwrap();
+        }
+        let key = DeviceKey::from_seed(&seed);
+        assert_eq!(
+            key.sign_dtls(
+                v["sid"].as_str().unwrap(),
+                v["fingerprint"].as_str().unwrap()
+            ),
+            v["signature"].as_str().unwrap()
+        );
+    }
 
     #[test]
     fn matches_shared_fixture() {

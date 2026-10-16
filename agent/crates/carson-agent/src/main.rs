@@ -405,21 +405,19 @@ fn status(dir: PathBuf) -> Result<()> {
     match config::load(&dir)? {
         None => println!("not paired"),
         Some(cfg) => {
-            let has_key = keystore::default_store(&cfg.server_url, &dir)?
-                .load()?
-                .is_some();
+            let key = keystore::default_store(&cfg.server_url, &dir)?.load()?;
+            let key_id = key.map_or_else(
+                || "MISSING".to_owned(),
+                |seed| DeviceKey::from_seed(&seed).key_id(),
+            );
             let access = match (cfg.unattended, cfg.pin_hash.is_some()) {
                 (false, _) => "attended (each connection must be allowed here)",
                 (true, true) => "unattended, PIN required",
                 (true, false) => "unattended, no PIN",
             };
             println!(
-                "paired\n  server:    {}\n  device id: {}\n  name:      {}\n  key:       {}\n  access:    {}",
-                cfg.server_url,
-                cfg.device_id,
-                cfg.name,
-                if has_key { "present" } else { "MISSING" },
-                access
+                "paired\n  server:    {}\n  device id: {}\n  name:      {}\n  key id:    {}  (the viewer shows the same value)\n  access:    {}",
+                cfg.server_url, cfg.device_id, cfg.name, key_id, access
             );
         }
     }

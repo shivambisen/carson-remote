@@ -2,6 +2,7 @@
 //! as online, and carries session signaling. Reconnects with backoff; stops only on errors
 //! that retrying cannot fix. Running sessions survive signaling reconnects (media is P2P).
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -19,6 +20,8 @@ use tokio::sync::mpsc;
 
 /// Server close code: another agent connected with this device's identity.
 const CLOSE_REPLACED: u16 = 4000;
+/// Server close code: the owner removed this device from their account.
+const CLOSE_REVOKED: u16 = 4003;
 /// How often we ping the server (keeps NAT mappings alive, detects dead links).
 const PING_INTERVAL: Duration = Duration::from_secs(15);
 /// No frame at all for this long means the connection is dead.
@@ -37,7 +40,7 @@ enum Ended {
 
 pub struct Agent {
     api: Api,
-    key: DeviceKey,
+    key: Arc<DeviceKey>,
     device_id: String,
     sessions: std::sync::Mutex<Sessions>,
     /// Outgoing signaling, kept across reconnects.
@@ -53,11 +56,12 @@ impl Agent {
         policy: crate::consent::AccessPolicy,
     ) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
+        let key = Arc::new(key);
         Self {
             api,
-            key,
+            key: Arc::clone(&key),
             device_id,
-            sessions: std::sync::Mutex::new(Sessions::new(tx, media, policy)),
+            sessions: std::sync::Mutex::new(Sessions::new(tx, media, policy, Arc::clone(&key))),
             outbox: tokio::sync::Mutex::new(rx),
         }
     }
@@ -160,6 +164,9 @@ impl Agent {
                         Message::Text(text) => self.handle_text(&text),
                         Message::Close(frame) => {
                             let code = frame.as_ref().map(|f| u16::from(f.code));
+                            if code == Some(CLOSE_REVOKED) {
+                                return Ended::Fatal(ApiError::DeviceRejected.into());
+                            }
                             if code == Some(CLOSE_REPLACED) {
                                 return Ended::Fatal(anyhow::anyhow!(
                                     "another carson-agent connected as this device; only one may run at a time"
