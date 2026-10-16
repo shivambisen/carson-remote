@@ -310,7 +310,21 @@ Viewer: `vite`, `typescript`, `vitest`. Nothing else at runtime.
 - **Residual trust in the server:** a server that is malicious *from the very first connection* of a browser could hand out its own key (TOFU limit). Comparing key IDs out of band closes that gap. Pins are per browser profile.
 - Verified: Go tests (audit rows and pagination, retention, owner-only revoke, live kick with 4003, flood close, resume throttling, no cross-account names) and Rust/TS fixture tests. In Chrome: signed session goes Live, the key ID matches `carson-agent status`, a tampered pin is refused before connecting, the Activity page lists the session, and Remove kicks the agent. Browser testing also exposed and fixed a viewer router race, where a stale async navigation could start a session after the user had left the page.
 
+**M7:**
+- Encoders sit behind a `VideoEncoder` trait. On macOS, **VideoToolbox** runs with low-latency rate control (`EnableLowLatencyRateControl`), Constrained Baseline, real-time, no reordering and `CompleteFrames` per frame (one in / one out), at 5.0 ms/frame at 720p vs 10.6 ms for OpenH264. Bitrate changes are applied live. If no hardware session can be created it falls back to OpenH264. The Windows hardware encoder (Media Foundation) is not done: Windows uses OpenH264.
+- **Free H.264 licensing:** release builds (`--no-default-features`) contain no OpenH264 code. `setup` downloads Cisco's official binary from ciscobinary.openh264.org (Cisco's terms: end users download it, with the credit shown) and it is loaded only if its SHA-256 matches Cisco's 2.6.0 list. Development builds may compile OpenH264 from source.
+- Adaptive quality, encoder self-heal (rebuild on error, give up after 3 consecutive failures) and glass-to-glass measurement as described in [benchmarks.md](benchmarks.md). Measured p50 45 ms / p95 48 ms at 27-29 fps (same machine).
+- **Known:** ICE restart stalls video ~1.5 s. Downscaling is on the CPU (nearest neighbour). No netem-based quality tests yet.
+
+**M8:**
+- `carson-agent setup` does pairing (opening the browser with the code), permission checks, codec download and the login service in one step. `service install|uninstall|status` uses a LaunchAgent (Aqua session), a Task Scheduler logon task, or a systemd user unit. `run --service` stops cleanly on fatal errors instead of restart-looping.
+- **Free distribution:** macOS binaries are ad-hoc signed (no paid Developer ID) and embed an Info.plist (bundle ID, `NSScreenCaptureUsageDescription`). Distribution is a Homebrew tap (no quarantine) or a download with a one-time right-click → Open. Windows ships unsigned; SignPath Foundation offers free signing to open-source projects. Because ad-hoc signatures change with every build, macOS asks for permissions again after updates (documented).
+- `release.yml` builds everything on free GitHub runners: macOS arm64/x86_64 and Windows agents, server tarballs with the viewer, a multi-arch image on ghcr.io (arm64 for Oracle's free Ampere VMs), and a release with checksums. `deploy/install-server.sh` sets up a fresh Ubuntu VM: Docker, firewall (including Oracle's iptables), generated secrets, coturn `external-ip` for cloud NAT, Caddy HTTPS.
+- Docs: [user guide](user-guide.md), [self-hosting](self-hosting.md), [E2E test plan](e2e-test-plan.md), [benchmarks](benchmarks.md).
+- **Not verified here:** the release workflow and the Windows build (no CI remote yet), `install-server.sh` and the Docker image (no VPS; Docker Desktop was broken on the dev Mac), installing the real login service on this Mac (deliberately not done to avoid persistent changes), and the tray icon (not built: setup + browser cover pairing; a tray is future work).
+
 ## 18. Future work (not in M1–M8)
 
 LAN-only serverless mode (mDNS), file transfer, audio, multi-viewer, a desktop viewer app, mobile viewer,
-login screen / UAC control, horizontal scaling (Redis presence, sticky WebSockets).
+login screen / UAC control, horizontal scaling (Redis presence, sticky WebSockets), tray icon,
+Windows hardware encoding (Media Foundation), Linux host (PipeWire + uinput), GPU scaling.

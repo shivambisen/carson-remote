@@ -1,8 +1,34 @@
 # carson
 
-Remote desktop for your own devices: sign in on two laptops, pick one, and view and control its
-screen over WebRTC. Video and input go peer-to-peer and are end-to-end encrypted. A small server
-handles discovery, signaling, and TURN relay fallback.
+Free remote desktop for your own computers. Sign in, pick one of your devices, and view and
+control its screen from a browser. Video, keyboard and mouse go **directly and encrypted**
+between your computers; a small self-hosted server introduces them and relays only when a
+network blocks direct connections.
+
+- **Free:** no paid services needed (free VM, free domain, free HTTPS, free codecs).
+- **Simple:** one command per computer: `carson-agent setup --server https://your-server`.
+- **Private:** only your account's devices, a visible "being controlled" banner, an Allow/Deny prompt
+  (or a PIN for unattended use), signed end-to-end connections, and an activity log.
+
+## Quick start
+
+1. **Server** (once, about 10 minutes, $0): follow [docs/self-hosting.md](docs/self-hosting.md)
+   (Oracle Cloud Always Free + DuckDNS + one script).
+2. **Each computer to reach**: install `carson-agent` from the
+   [releases](../../releases) (or Homebrew), then
+   `carson-agent setup --server https://your-server`.
+3. **From anywhere:** open your server in a browser, sign in, click **View**.
+
+Details: [docs/user-guide.md](docs/user-guide.md) · Test plan: [docs/e2e-test-plan.md](docs/e2e-test-plan.md) ·
+Benchmarks: [docs/benchmarks.md](docs/benchmarks.md)
+
+| Host OS | Status |
+|---|---|
+| macOS 14+ (Apple Silicon, Intel) | ✅ hardware encoding, tested |
+| Windows 10 1903+ | ⚠️ implemented, compile-checked, **not yet run on Windows** |
+| Linux | ❌ host not supported yet (server runs fine on Linux) |
+
+## For developers
 
 Design: [docs/carson-design.md](docs/carson-design.md)
 
@@ -93,6 +119,15 @@ make lint
 scripts/e2e-pairing.sh   # real server + real agent: pair, online, offline
 ```
 
+## Releasing
+
+Push a tag `vX.Y.Z`: `.github/workflows/release.yml` builds macOS (arm64, x86_64) and Windows
+agents, server tarballs (viewer bundled) for Linux/macOS/Windows, a multi-arch server image on
+ghcr.io, and a GitHub Release with checksums. Copy the macOS checksums into
+`packaging/homebrew/carson-agent.rb` in your `homebrew-carson` tap. Release agents are built with
+`--no-default-features`, so they never contain source-compiled OpenH264 (Cisco's royalty coverage
+applies only to its own binaries, which `setup` downloads from Cisco).
+
 ## Status
 
-Milestones 1–4 are done: sign-in, pairing, presence, screen share, and remote control (mouse, keyboard, scroll, text clipboard, monitor switching) on macOS hosts. Windows capture/input is implemented but so far only compile-checked. M5 (TURN relay, ICE restart, 30 s resume) is done, along with the consent part of M6. M6 (consent, PIN, audit log, revoke, rate limits, signed DTLS fingerprints) is done. Next: M7, hardware encoding and latency. See the milestone table in the design doc.
+All eight milestones (M1–M8) are implemented; see the milestone table and as-built notes in [the design doc](docs/carson-design.md). Known gaps are listed there and in the host OS table above.
