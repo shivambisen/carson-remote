@@ -275,7 +275,7 @@ Viewer: `vite`, `typescript`, `vitest`. Nothing else at runtime.
 - Banner: shown right before the first frame is sent, red, always on top, on all Spaces (macOS) / topmost tool window (Windows). It cannot be closed except with **Disconnect**, which ends the session (`host_disconnected`). If it cannot be shown, the session ends (`banner_unavailable`). The only exception is a synthetic test pattern with non-native input.
 - UI runs in a helper process (`carson-agent ui prompt|banner`, code in `carson-hostui`). It exits if the agent goes away (stdin EOF), and the agent kills it when the session ends. Fail-closed throughout.
 - Verified: PIN gate end to end in a webrtc-rs loopback test (no frames or input before the PIN, wrong-PIN countdown, unlock) and in Chrome (PIN keystrokes are not forwarded). Banner and prompt helpers start and stay up on macOS. Windows UI is compile- and clippy-checked only.
-- Still to do in M6: audit log, revoke device, server-side rate-limit review, DTLS fingerprint signing. Linux has no prompt or banner yet, so attended sessions there are refused.
+- Linux has no prompt or banner yet, so attended sessions there are refused.
 
 **M5:**
 - TURN: `turn.creds` carries STUN plus TURN credentials in coturn's REST-API scheme: username `<expiry>:<sid>`, credential `base64(HMAC-SHA1(secret, username))`. The TTL defaults to **6 h** (`CARSON_TURN_TTL`), not the 10 min planned in §6, because TURN allocations are refreshed with the same credentials throughout a session. A leaked credential only allows relaying until it expires, through coturn's denied-peer filters. A Go test checks the credential against an independent Python HMAC vector.
@@ -284,6 +284,31 @@ Viewer: `vite`, `typescript`, `vitest`. Nothing else at runtime.
 - ICE restart: the agent (offerer) restarts after 2 s of `disconnected`, immediately on `failed` or on `session.ice_restart` from the viewer, at most every 2 s, and after a signaling reconnect if media is down. After 30 s without media the session ends (`connection_lost`). A keyframe is forced on recovery. Data channels and DTLS survive restarts.
 - Verified: Go tests for credentials, resume (wrong token, stolen token from another account, wrong side's token, expiry, busy) and ICE-restart relay. Rust loopback test: a restart via viewer request and via simulated failure renegotiates with a new ufrag and keeps streaming. Chrome against a local coturn: forced-relay session at 30 fps on path `relay→host`; viewer WebSocket killed mid-session → auto-reconnect and `session resumed`, video uninterrupted; ICE restart over the relay → new ufrag, recovered.
 - **Known:** video stalls for about 1.5 s during an ICE restart (webrtc-rs pauses media while re-checking), to tune in M7. Agent-side signaling loss is covered by tests but has not been exercised live. No netem/packet-loss tests yet.
+
+**M6 (rest):**
+- **Audit log** (`audit_log` table, append-only from the API's point of view): sign-ins (provider), device paired/revoked, and every session transition: requested, accepted, rejected (reason, by server/host), resumed (side), ended (reason, who: viewer/host/timeout/owner, duration from accept). Each row has the viewer IP and user agent. Owners read their own log at `GET /v1/audit` and on the viewer's **Activity** page. Rejections for a device on another account store no device ID, so the log never names someone else's device. Pruned after `CARSON_AUDIT_RETENTION` (default 90 days; IPs are personal data). Write failures are logged at error level ("AUDIT WRITE FAILED"), never silently dropped. Agent-side PIN failures are logged by the agent, not the server.
+- **Revoke**: `POST /v1/devices/{id}/revoke` (owner only) sets `revoked_at`, deletes the device's tokens, ends its sessions (viewer gets `device_revoked`) and closes the agent with 4003. The agent stops with a re-pair hint. Revoked rows stay so the audit log can still name them.
+- **Rate limits** (all in-memory token buckets, single node):
+
+  | Surface | Limit | Key |
+  |---|---|---|
+  | Everything (coarse guard) | 1200/min, burst 300 | IP |
+  | OAuth login start, OAuth callback, dev login | 20/min | IP |
+  | Pair start | 10 per 10 min | IP |
+  | Pair code lookup/approve | 10/min | user **and** IP |
+  | Pair poll | 60/min | IP |
+  | Device challenge/token | 30/min | IP |
+  | WebSocket upgrade | 30/min | IP |
+  | Inbound WS messages | 200/s, burst 400 (closes the socket) | connection |
+  | `session.request` | 10/min, burst 5 | user |
+  | `session.resume` | 10/min | account/device |
+  | Revoke | 10/min | user |
+  | Unattended PIN | 5 tries, then 15 min lockout (agent) | host |
+
+  Behind a proxy, `CARSON_TRUST_PROXY=true` keys by the proxy-appended client IP. Moving to several server nodes needs these in Redis.
+- **DTLS fingerprint signing** (§7 mitigation, now implemented): every offer, including ICE restarts, carries `carson_sig = Ed25519(device key, "carson-dtls:v1\n<sid>\n<fingerprint>")`, with the first `a=fingerprint` normalized (`proto/dtls-binding.json`, generated with Go's ed25519 and checked by the Rust and TS tests). The viewer verifies with WebCrypto Ed25519 before applying the offer, otherwise `identity_mismatch` and nothing is shown. Since browsers enforce that the DTLS certificate matches the SDP fingerprint, a valid signature proves media and input terminate at the paired device. The public key comes from the server, so the viewer **pins it on first use** per device ID (localStorage) and refuses a changed key. A legitimate change never happens: re-pairing creates a new device ID. Users can compare the key ID shown on the devices page with `carson-agent status`.
+- **Residual trust in the server:** a server that is malicious *from the very first connection* of a browser could hand out its own key (TOFU limit). Comparing key IDs out of band closes that gap. Pins are per browser profile.
+- Verified: Go tests (audit rows and pagination, retention, owner-only revoke, live kick with 4003, flood close, resume throttling, no cross-account names) and Rust/TS fixture tests. In Chrome: signed session goes Live, the key ID matches `carson-agent status`, a tampered pin is refused before connecting, the Activity page lists the session, and Remove kicks the agent. Browser testing also exposed and fixed a viewer router race, where a stale async navigation could start a session after the user had left the page.
 
 ## 18. Future work (not in M1–M8)
 

@@ -57,6 +57,11 @@ carson-agent unattended off        # back to Allow/Deny prompts
 The PIN is checked on the host, inside the encrypted connection, and stored only as an
 Argon2id hash. The banner still appears in unattended mode.
 
+**Security:** every connection is listed on the **Activity** page (who, when, from which IP and
+browser, how it ended). **Remove** on the devices page revokes a device instantly. The viewer
+checks that each stream is signed by the device's own key (shown as "key …"; compare it with
+`carson-agent status` on that computer) and refuses a device whose key changed.
+
 **Networks:** connections are direct when possible and fall back to the TURN relay (coturn)
 on strict NATs and firewalls. Set `CARSON_TURN_SECRET` (shared with coturn) and `CARSON_TURN_URLS`;
 the server hands each session time-limited credentials. Add `?relay=1` to a view URL to force the
@@ -90,4 +95,4 @@ scripts/e2e-pairing.sh   # real server + real agent: pair, online, offline
 
 ## Status
 
-Milestones 1–4 are done: sign-in, pairing, presence, screen share, and remote control (mouse, keyboard, scroll, text clipboard, monitor switching) on macOS hosts. Windows capture/input is implemented but so far only compile-checked. M5 (TURN relay, ICE restart, 30 s resume) is done, along with the consent part of M6. Next: the rest of M6 (audit log, revoke, rate limits). See the milestone table in the design doc.
+Milestones 1–4 are done: sign-in, pairing, presence, screen share, and remote control (mouse, keyboard, scroll, text clipboard, monitor switching) on macOS hosts. Windows capture/input is implemented but so far only compile-checked. M5 (TURN relay, ICE restart, 30 s resume) is done, along with the consent part of M6. M6 (consent, PIN, audit log, revoke, rate limits, signed DTLS fingerprints) is done. Next: M7, hardware encoding and latency. See the milestone table in the design doc.
