@@ -75,13 +75,27 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn cisco_download_verifies_and_encodes() {
-        assert!(std::env::var_os("CARSON_OPENH264_DIR").is_some(), "set CARSON_OPENH264_DIR to a scratch dir");
-        let path = super::ensure_openh264().await.unwrap().expect("platform supported");
+        assert!(
+            std::env::var_os("CARSON_OPENH264_DIR").is_some(),
+            "set CARSON_OPENH264_DIR to a scratch dir"
+        );
+        let path = super::ensure_openh264()
+            .await
+            .unwrap()
+            .expect("platform supported");
         let api = openh264::OpenH264API::from_blob_path(&path).expect("hash-verified load");
-        let mut enc = openh264::encoder::Encoder::with_api_config(api, openh264::encoder::EncoderConfig::new()).unwrap();
+        let mut enc = openh264::encoder::Encoder::with_api_config(
+            api,
+            openh264::encoder::EncoderConfig::new(),
+        )
+        .unwrap();
         let yuv = openh264::formats::YUVBuffer::new(320, 240);
         let out = enc.encode(&yuv).unwrap().to_vec();
         assert!(!out.is_empty(), "Cisco's encoder produced a bitstream");
-        eprintln!("cisco OpenH264 OK: {} ({} bytes out)", path.display(), out.len());
+        eprintln!(
+            "cisco OpenH264 OK: {} ({} bytes out)",
+            path.display(),
+            out.len()
+        );
     }
 }
