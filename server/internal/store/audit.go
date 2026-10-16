@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"database/sql"
 
 	"time"
 )
@@ -86,7 +85,7 @@ func (s *Store) PruneAudit(ctx context.Context, before time.Time) error {
 // RevokeDevice marks the user's device revoked and deletes its access tokens. Revoked devices
 // stay in the table (so the audit log can still name them) but can never authenticate again.
 func (s *Store) RevokeDevice(ctx context.Context, userID, deviceID string, now time.Time) error {
-	return s.tx(ctx, func(tx *sql.Tx) error {
+	return s.tx(ctx, func(tx *Tx) error {
 		res, err := tx.ExecContext(ctx, `UPDATE devices SET revoked_at = ? WHERE id = ? AND user_id = ? AND revoked_at IS NULL`, ms(now), deviceID, userID)
 		if err != nil {
 			return err

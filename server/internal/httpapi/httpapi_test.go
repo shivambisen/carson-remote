@@ -19,16 +19,12 @@ import (
 	"github.com/coder/websocket"
 
 	"carson/server/internal/config"
-	"carson/server/internal/store"
+	"carson/server/internal/store/storetest"
 )
 
 func newServer(t *testing.T, webDir string) *httptest.Server {
 	t.Helper()
-	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "c.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
+	st := storetest.Open(t)
 	srv := httptest.NewUnstartedServer(nil)
 	srv.Start()
 	t.Cleanup(srv.Close)

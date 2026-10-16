@@ -13,7 +13,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"sync"
@@ -24,6 +23,7 @@ import (
 	"carson/server/internal/auth"
 	"carson/server/internal/ratelimit"
 	"carson/server/internal/store"
+	"carson/server/internal/store/storetest"
 )
 
 type fakePresence struct{ online map[string]bool }
@@ -47,11 +47,7 @@ type env struct {
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
-	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "c.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
+	st := storetest.Open(t)
 	e := &env{clock: &clock{t: time.Now()}, pres: fakePresence{online: map[string]bool{}}}
 	mux := http.NewServeMux()
 	e.srv = httptest.NewServer(mux)

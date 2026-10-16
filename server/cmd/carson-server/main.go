@@ -37,7 +37,11 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	st, err := store.Open(ctx, cfg.DBPath)
+	dsn := cfg.DBPath
+	if cfg.DatabaseURL != "" {
+		dsn = cfg.DatabaseURL
+	}
+	st, err := store.Open(ctx, dsn)
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}

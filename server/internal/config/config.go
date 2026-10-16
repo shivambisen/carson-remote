@@ -12,14 +12,16 @@ import (
 
 // Config is the full runtime configuration. Secrets only ever come from the environment.
 type Config struct {
-	Addr       string
-	PublicURL  *url.URL
-	DBPath     string
-	LogLevel   slog.Level
-	Dev        bool
-	TURNSecret string
-	TURNURLs   []string
-	STUNURLs   []string
+	Addr      string
+	PublicURL *url.URL
+	DBPath    string
+	// DatabaseURL, if set (postgres://…), is used instead of the SQLite file at DBPath.
+	DatabaseURL string
+	LogLevel    slog.Level
+	Dev         bool
+	TURNSecret  string
+	TURNURLs    []string
+	STUNURLs    []string
 	// TURNTTL bounds TURN credential lifetime (0 = turn.DefaultTTL).
 	TURNTTL time.Duration
 	// AuditRetention is how long audit events (with IPs: personal data) are kept.
@@ -57,11 +59,12 @@ func Load(getenv func(string) string) (Config, error) {
 
 	var errs []error
 	cfg := Config{
-		Addr:       get("CARSON_ADDR", ":8080"),
-		DBPath:     get("CARSON_DB_PATH", "./data/carson.db"),
-		TURNSecret: getenv("CARSON_TURN_SECRET"),
-		TURNURLs:   splitList(getenv("CARSON_TURN_URLS")),
-		STUNURLs:   splitList(getenv("CARSON_STUN_URLS")),
+		Addr:        get("CARSON_ADDR", ":8080"),
+		DBPath:      get("CARSON_DB_PATH", "./data/carson.db"),
+		DatabaseURL: get("CARSON_DATABASE_URL", ""),
+		TURNSecret:  getenv("CARSON_TURN_SECRET"),
+		TURNURLs:    splitList(getenv("CARSON_TURN_URLS")),
+		STUNURLs:    splitList(getenv("CARSON_STUN_URLS")),
 
 		AllowedOrigins: splitList(getenv("CARSON_ALLOWED_ORIGINS")),
 		WebDir:         get("CARSON_WEB_DIR", ""),
@@ -92,6 +95,9 @@ func Load(getenv func(string) string) (Config, error) {
 			errs = append(errs, fmt.Errorf("CARSON_AUDIT_RETENTION: want a duration of at least 1h (e.g. 2160h), got %q", v))
 		}
 		cfg.AuditRetention = d
+	}
+	if cfg.DatabaseURL != "" && !strings.HasPrefix(cfg.DatabaseURL, "postgres://") && !strings.HasPrefix(cfg.DatabaseURL, "postgresql://") {
+		errs = append(errs, errors.New("CARSON_DATABASE_URL: must be a postgres:// or postgresql:// URL"))
 	}
 	parseBool("CARSON_DEV", &cfg.Dev)
 	parseBool("CARSON_TRUST_PROXY", &cfg.TrustProxy)

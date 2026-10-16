@@ -132,7 +132,7 @@ func (s *Store) ApprovePairingByID(ctx context.Context, pairingID, userID string
 
 func (s *Store) approvePairing(ctx context.Context, column string, key any, userID string, now time.Time) (Device, error) {
 	var d Device
-	err := s.tx(ctx, func(tx *sql.Tx) error {
+	err := s.tx(ctx, func(tx *Tx) error {
 		// column is one of two constants above, never user input.
 		p, err := scanPairing(tx.QueryRowContext(ctx, `SELECT `+pairingCols+` FROM pairings WHERE `+column+` = ? AND status = 'pending' AND expires_at > ?`, key, ms(now)))
 		if err != nil {

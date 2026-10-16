@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/json"
@@ -11,7 +10,6 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +19,7 @@ import (
 
 	"carson/server/internal/ratelimit"
 	"carson/server/internal/store"
+	"carson/server/internal/store/storetest"
 )
 
 type harness struct {
@@ -31,11 +30,7 @@ type harness struct {
 
 func newHarness(t *testing.T, dev bool, providers ...Provider) *harness {
 	t.Helper()
-	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "c.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
+	st := storetest.Open(t)
 	h := &harness{}
 	mux := http.NewServeMux()
 	h.srv = httptest.NewServer(mux)

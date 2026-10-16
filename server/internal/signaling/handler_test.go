@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +22,7 @@ import (
 	"carson/server/internal/protocol"
 	"carson/server/internal/ratelimit"
 	"carson/server/internal/store"
+	"carson/server/internal/store/storetest"
 	"carson/server/internal/turn"
 )
 
@@ -40,11 +40,7 @@ func newEnv(t *testing.T) *env {
 
 func newEnvWithHeartbeat(t *testing.T, interval, timeout time.Duration) *env {
 	t.Helper()
-	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "c.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
+	st := storetest.Open(t)
 	mux := http.NewServeMux()
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)

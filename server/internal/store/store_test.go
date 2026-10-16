@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,14 +13,54 @@ import (
 
 var t0 = time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 
+// newStore is SQLite in a temp dir, or a throwaway schema in CARSON_TEST_DATABASE_URL
+// (same as storetest.Open, which this package can't import).
 func newStore(t *testing.T) *Store {
 	t.Helper()
-	s, err := Open(context.Background(), filepath.Join(t.TempDir(), "carson.db"))
+	ctx := context.Background()
+	base := os.Getenv("CARSON_TEST_DATABASE_URL")
+	if base == "" {
+		s, err := Open(ctx, filepath.Join(t.TempDir(), "carson.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { s.Close() })
+		return s
+	}
+	schema := "carson_test_" + strings.ToLower(NewID("s")[2:14])
+	admin, err := sql.Open("pgx", base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.ExecContext(ctx, `CREATE SCHEMA `+schema); err != nil {
+		t.Fatal(err)
+	}
+	// Registered first, so it runs last: after the store is closed, even if opening failed.
+	t.Cleanup(func() {
+		if _, err := admin.ExecContext(context.Background(), `DROP SCHEMA `+schema+` CASCADE`); err != nil {
+			t.Errorf("drop test schema %s: %v", schema, err)
+		}
+		admin.Close()
+	})
+	s, err := OpenInSchema(ctx, base, schema)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { s.Close() })
 	return s
+}
+
+func TestRebind(t *testing.T) {
+	q := `SELECT a FROM t WHERE x = ? AND y = 'what?' AND z > ?`
+	if got := rebind(true, q); got != `SELECT a FROM t WHERE x = $1 AND y = 'what?' AND z > $2` {
+		t.Fatalf("rebind = %s", got)
+	}
+	if rebind(false, q) != q {
+		t.Fatal("SQLite queries must be left alone")
+	}
+	if !IsPostgres("postgresql://u:p@h/db") || IsPostgres("./data/carson.db") {
+		t.Fatal("IsPostgres")
+	}
 }
 
 func TestMigrationsAreIdempotent(t *testing.T) {

@@ -33,7 +33,7 @@ func (s *Store) UpsertUserForIdentity(ctx context.Context, ident Identity, now t
 		return User{}, errors.New("identity requires provider, subject and verified email")
 	}
 	var u User
-	err := s.tx(ctx, func(tx *sql.Tx) error {
+	err := s.tx(ctx, func(tx *Tx) error {
 		var userID string
 		err := tx.QueryRowContext(ctx, `SELECT user_id FROM identities WHERE provider = ? AND subject = ?`,
 			ident.Provider, ident.Subject).Scan(&userID)
