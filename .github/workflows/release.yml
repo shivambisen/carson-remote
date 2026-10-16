@@ -15,11 +15,14 @@ jobs:
     strategy:
       matrix:
         include:
-          - { runner: macos-15, target: aarch64-apple-darwin }
+          - { runner: macos-latest, target: aarch64-apple-darwin }
           - { runner: macos-15-intel, target: x86_64-apple-darwin }
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v5
+      # screencapturekit's Swift bridge (apple-metal) uses macOS 26 SDK APIs (MTLTensor).
+      - uses: maxim-lobanov/setup-xcode@v1
+        with: { xcode-version: latest-stable }
       - uses: dtolnay/rust-toolchain@stable
         with: { targets: "${{ matrix.target }}" }
       - run: packaging/macos/build.sh ${{ matrix.target }}
