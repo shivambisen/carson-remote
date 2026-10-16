@@ -46,7 +46,7 @@ export function ConnectPage({ params }: { params: URLSearchParams }) {
       <Card>
         <CardHeader className="items-center text-center">
           {error ? <XCircle className="mx-auto size-10 text-destructive" /> : <Loader2 className="mx-auto size-10 animate-spin text-primary" />}
-          <CardTitle className="text-xl">{error ? "Couldn't add this computer" : name ? `Adding ${name}…` : "Adding this computer…"}</CardTitle>
+          <CardTitle className="font-serif text-3xl font-normal tracking-[-0.02em]">{error ? "Couldn't add this computer" : name ? `Adding ${name}…` : "Adding this computer…"}</CardTitle>
           <CardDescription>{error ?? "Finishing sign-in in the carson app."}</CardDescription>
         </CardHeader>
         {error && (
@@ -69,7 +69,7 @@ export function ConnectedPage({ params }: { params: URLSearchParams }) {
       <Card>
         <CardHeader className="items-center text-center">
           <CheckCircle2 className="mx-auto size-10 text-success" />
-          <CardTitle className="text-xl">{name ? `${name} is connected` : "Computer connected"}</CardTitle>
+          <CardTitle className="font-serif text-3xl font-normal tracking-[-0.02em]">{name ? `${name} is connected` : "Computer connected"}</CardTitle>
           <CardDescription>You can close this tab. Connect to this computer from your device list, from any browser.</CardDescription>
         </CardHeader>
         <CardContent>

@@ -129,7 +129,7 @@ export function DevicesPage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Devices</h1>
+          <h1 className="font-serif text-4xl tracking-[-0.02em]">Devices</h1>
           <p className="text-sm text-muted-foreground">Computers on your account. Click Connect to see and control one.</p>
         </div>
         <div className="flex items-center gap-3">

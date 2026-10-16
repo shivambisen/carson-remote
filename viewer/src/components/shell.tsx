@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Activity, LogOut, Monitor } from "lucide-react";
+import { Activity, LogOut } from "lucide-react";
 
 import type { User } from "@/api";
 import { Button } from "@/components/ui/button";
@@ -9,9 +9,7 @@ import { cn } from "@/lib/utils";
 export function Logo({ className }: { className?: string }) {
   return (
     <a href="#/devices" className={cn("flex items-center gap-2 font-semibold tracking-tight", className)}>
-      <span className="grid size-7 place-items-center rounded-md bg-primary text-primary-foreground">
-        <Monitor className="size-4" />
-      </span>
+      <img src="/icon.svg" alt="" className="size-7" />
       carson
     </a>
   );
@@ -80,7 +78,7 @@ export function Shell({ user, onSignOut, active, children }: { user: User | null
 /** A centered, narrow layout for sign-in and one-off pages. */
 export function Centered({ children }: { children: ReactNode }) {
   return (
-    <div className="flex min-h-svh flex-col items-center justify-center gap-8 bg-muted/40 px-4 py-10">
+    <div className="flex min-h-svh flex-col items-center justify-center gap-8 bg-[radial-gradient(circle,color-mix(in_oklab,var(--foreground)_12%,transparent)_1px,transparent_1.3px)] bg-[length:22px_22px] px-4 py-10">
       <Logo className="text-lg" />
       <div className="w-full max-w-sm">{children}</div>
     </div>
