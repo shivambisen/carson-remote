@@ -4,6 +4,7 @@
 mod abr;
 mod api;
 mod backoff;
+mod codec;
 mod config;
 mod connection;
 mod consent;
@@ -13,6 +14,7 @@ mod keyframe;
 mod keystore;
 mod media;
 mod peer;
+mod service;
 mod sessions;
 mod ui;
 
@@ -35,11 +37,13 @@ USAGE:
     carson-agent [OPTIONS] <COMMAND>
 
 COMMANDS:
+    setup --server <URL> [--name <NAME>]  One-step install: pair, permissions, codec, start at login
     pair --server <URL> [--name <NAME>]   Enroll this computer with your carson account
     run [MEDIA OPTIONS]                   Stay online and share this screen with your viewers
     capture-check [MEDIA OPTIONS]         Check screen capture works (permission, frame rate)
     status                                Show pairing state
     unpair                                Forget this computer's identity (local only)
+    service install | uninstall | status  Start carson automatically at login (or stop doing so)
     unattended on [--pin] | off           Allow connections without approval at this computer
                                           (optionally protected by a 6-10 digit PIN)
 
@@ -56,6 +60,7 @@ MEDIA OPTIONS:
 OPTIONS:
     --config-dir <DIR>     State directory (default: OS config dir/carson, or $CARSON_AGENT_DIR)
     --log-format <FMT>     text (default) or json
+    --log-file <PATH>      Append logs to a file instead of stderr
     -V, --version          Print version
     -h, --help             Print help
 
@@ -67,7 +72,18 @@ enum Command {
         server: String,
         name: Option<String>,
     },
-    Run(media::MediaOptions),
+    Run {
+        media: media::MediaOptions,
+        /// Running under the OS service manager: fatal errors stop the service quietly.
+        service: bool,
+    },
+    Setup {
+        server: String,
+        name: Option<String>,
+        open_browser: bool,
+        install_service: bool,
+    },
+    Service(ServiceAction),
     CaptureCheck(media::MediaOptions),
     Status,
     Unpair,
@@ -81,11 +97,19 @@ enum Command {
     Version,
 }
 
+#[derive(Debug, PartialEq)]
+enum ServiceAction {
+    Install,
+    Uninstall,
+    Status,
+}
+
 #[derive(Debug)]
 struct Cli {
     command: Command,
     config_dir: Option<PathBuf>,
     json_logs: bool,
+    log_file: Option<PathBuf>,
 }
 
 fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Cli> {
@@ -96,6 +120,9 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Cli> {
     let mut media_flags = false;
     let mut input_explicit = false;
     let mut unattended: Option<bool> = None;
+    let mut log_file: Option<PathBuf> = None;
+    let (mut service_mode, mut no_browser, mut no_service) = (false, false, false);
+    let mut service_action: Option<ServiceAction> = None;
     let mut pin = false;
     fn number<T>(flag: &str, v: String, min: T, max: T) -> Result<T>
     where
@@ -118,6 +145,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Cli> {
                     command: Command::Help,
                     config_dir,
                     json_logs,
+                    log_file,
                 });
             }
             "-V" | "--version" => {
@@ -125,6 +153,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Cli> {
                     command: Command::Version,
                     config_dir,
                     json_logs,
+                    log_file,
                 });
             }
             "--server" => server = Some(value("--server")?),
@@ -185,7 +214,8 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Cli> {
                 media_flags = true;
                 media.clipboard = false;
             }
-            "pair" | "run" | "capture-check" | "status" | "unpair" | "unattended"
+            "pair" | "setup" | "service" | "run" | "capture-check" | "status" | "unpair"
+            | "unattended"
                 if command.is_none() =>
             {
                 command = Some(arg)
@@ -195,12 +225,26 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Cli> {
                     command: Command::Ui(args.collect()),
                     config_dir,
                     json_logs,
+                    log_file,
                 });
             }
             "on" | "off" if command.as_deref() == Some("unattended") && unattended.is_none() => {
                 unattended = Some(arg == "on");
             }
             "--pin" => pin = true,
+            "--log-file" => log_file = Some(PathBuf::from(value("--log-file")?)),
+            "--service" => service_mode = true,
+            "--no-browser" => no_browser = true,
+            "--no-service" => no_service = true,
+            "install" | "uninstall" | "status"
+                if command.as_deref() == Some("service") && service_action.is_none() =>
+            {
+                service_action = Some(match arg.as_str() {
+                    "install" => ServiceAction::Install,
+                    "uninstall" => ServiceAction::Uninstall,
+                    _ => ServiceAction::Status,
+                });
+            }
             other => bail!("unexpected argument {other:?} (try --help)"),
         }
     }
@@ -210,10 +254,20 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Cli> {
             server: server.context("pair needs --server <URL>")?,
             name,
         },
+        Some("setup") => Command::Setup {
+            server: server
+                .context("setup needs --server <URL> (the address of your carson server)")?,
+            name,
+            open_browser: !no_browser,
+            install_service: !no_service,
+        },
         Some(c) if server.is_some() || name.is_some() => {
             bail!("--server/--name only apply to pair, not {c}")
         }
-        Some("run") => Command::Run(media),
+        Some("run") => Command::Run {
+            media,
+            service: service_mode,
+        },
         Some("capture-check") => Command::CaptureCheck(media),
         Some(c) if media_flags => {
             bail!("media options only apply to run and capture-check, not {c}")
@@ -224,6 +278,9 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Cli> {
             Command::Unattended { enable, pin }
         }
         Some(c) if pin => bail!("--pin only applies to unattended on, not {c}"),
+        Some("service") => {
+            Command::Service(service_action.context("service needs install, uninstall or status")?)
+        }
         Some("status") => Command::Status,
         Some("unpair") => Command::Unpair,
         Some(_) => unreachable!(),
@@ -232,19 +289,32 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Cli> {
         command,
         config_dir,
         json_logs,
+        log_file,
     })
 }
 
-fn init_logging(json: bool) {
+fn init_logging(json: bool, file: Option<&std::path::Path>) {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
-    let builder = tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_writer(std::io::stderr);
-    if json {
-        builder.json().init();
-    } else {
-        builder.init();
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,rtc_dtls=error,rtc_ice=warn"));
+    let file = file.and_then(|p| {
+        if let Some(dir) = p.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(p)
+            .ok()
+    });
+    let builder = tracing_subscriber::fmt().with_env_filter(filter);
+    match (file, json) {
+        (Some(f), true) => builder.json().with_writer(std::sync::Mutex::new(f)).init(),
+        (Some(f), false) => builder
+            .with_ansi(false)
+            .with_writer(std::sync::Mutex::new(f))
+            .init(),
+        (None, true) => builder.json().with_writer(std::io::stderr).init(),
+        (None, false) => builder.with_writer(std::io::stderr).init(),
     }
 }
 
@@ -259,7 +329,7 @@ fn default_name() -> String {
     }
 }
 
-async fn pair(dir: PathBuf, server: &str, name: Option<String>) -> Result<()> {
+async fn pair(dir: PathBuf, server: &str, name: Option<String>, open_browser: bool) -> Result<()> {
     if let Some(existing) = config::load(&dir)? {
         bail!(
             "already paired with {} as {} ({}); run `carson-agent unpair` first",
@@ -278,10 +348,11 @@ async fn pair(dir: PathBuf, server: &str, name: Option<String>) -> Result<()> {
     let start = api
         .pair_start(&key, &name, carson_proto::current_os())
         .await?;
-    println!(
-        "To pair \"{name}\", sign in and open:\n\n    {}\n",
-        start.verification_url
-    );
+    let link = format!("{}?code={}", start.verification_url, start.user_code);
+    println!("To pair \"{name}\", sign in and open:\n\n    {link}\n");
+    if open_browser && service::open_browser(&link) {
+        println!("(opened in your browser)");
+    }
     println!("code: {}", start.user_code);
     println!(
         "\nThe code expires in {} minutes. Waiting for approval…",
@@ -368,6 +439,85 @@ async fn run(dir: PathBuf, media: media::MediaOptions) -> Result<()> {
             Ok(())
         }
     }
+}
+
+/// One step from download to "it just works": pair, permissions, codec, background service.
+async fn setup(
+    dir: PathBuf,
+    server: &str,
+    name: Option<String>,
+    open_browser: bool,
+    install_service: bool,
+) -> Result<()> {
+    println!("carson setup\n");
+    println!("1/4  Pairing");
+    match config::load(&dir)? {
+        Some(cfg) => println!(
+            "     already paired with {} as \"{}\"",
+            cfg.server_url, cfg.name
+        ),
+        None => pair(dir.clone(), server, name, open_browser).await?,
+    }
+
+    println!("\n2/4  Permissions");
+    #[cfg(target_os = "macos")]
+    {
+        let screen = tokio::task::spawn_blocking(|| {
+            media::open_source(&media::MediaOptions::default()).map(drop)
+        })
+        .await?;
+        match screen {
+            Ok(()) => println!("     Screen Recording: allowed"),
+            Err(_) => {
+                println!(
+                    "     Screen Recording: NOT allowed yet. In System Settings > Privacy & Security >"
+                );
+                println!(
+                    "     Screen & System Audio Recording, turn on carson-agent, then run setup again."
+                );
+                let _ = service::open_browser(
+                    "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+                );
+            }
+        }
+        match carson_input::native_backend() {
+            Ok(_) => println!("     Accessibility (remote control): allowed"),
+            Err(_) => println!(
+                "     Accessibility: NOT allowed yet (a macOS prompt is open). Without it, the computer is view-only."
+            ),
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    println!("     nothing to grant on this OS");
+
+    println!("\n3/4  Video codec");
+    #[cfg(target_os = "macos")]
+    println!("     using the Mac's hardware H.264 encoder (VideoToolbox)");
+    match codec::ensure_openh264().await {
+        Ok(Some(path)) => println!("     OpenH264 fallback ready ({})", path.display()),
+        Ok(None) => println!("     no OpenH264 build for this platform"),
+        Err(e) if cfg!(target_os = "macos") => {
+            println!("     OpenH264 fallback not installed ({e:#}); hardware encoding still works")
+        }
+        Err(e) => return Err(e.context("this platform needs OpenH264 to stream")),
+    }
+
+    println!("\n4/4  Start automatically");
+    if install_service {
+        service::install(&dir)?;
+    } else {
+        println!("     skipped (--no-service); start manually with `carson-agent run`");
+    }
+
+    let cfg = config::load(&dir)?.context("pairing did not complete")?;
+    println!(
+        "\nDone. This computer appears under \"My devices\" at {}.",
+        cfg.server_url
+    );
+    println!(
+        "Each connection asks for your approval here, unless you set `carson-agent unattended on --pin`."
+    );
+    Ok(())
 }
 
 /// Opens the capture source and measures a few seconds of frames (permission diagnostics).
@@ -500,7 +650,7 @@ async fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    init_logging(cli.json_logs);
+    init_logging(cli.json_logs, cli.log_file.as_deref());
     let dir = match cli.config_dir.map_or_else(config::default_dir, Ok) {
         Ok(d) => d,
         Err(e) => {
@@ -520,8 +670,35 @@ async fn main() -> ExitCode {
             );
             Ok(())
         }
-        Command::Pair { server, name } => pair(dir, &server, name).await,
-        Command::Run(media) => run(dir, media).await,
+        Command::Pair { server, name } => pair(dir, &server, name, false).await,
+        Command::Run {
+            media,
+            service: true,
+        } => match run(dir, media).await {
+            // Under a service manager, a fatal error (device removed, duplicate instance)
+            // stops the service instead of triggering endless restarts.
+            Err(e) => {
+                tracing::error!(error = %format!("{e:#}"), "stopping the carson service");
+                Ok(())
+            }
+            ok => ok,
+        },
+        Command::Run {
+            media,
+            service: false,
+        } => run(dir, media).await,
+        Command::Setup {
+            server,
+            name,
+            open_browser,
+            install_service,
+        } => setup(dir, &server, name, open_browser, install_service).await,
+        Command::Service(ServiceAction::Install) => service::install(&dir),
+        Command::Service(ServiceAction::Uninstall) => service::uninstall(),
+        Command::Service(ServiceAction::Status) => {
+            println!("{}", service::status());
+            Ok(())
+        }
         Command::CaptureCheck(media) => capture_check(&media).await,
         Command::Status => status(dir),
         Command::Unpair => unpair(dir),
@@ -552,12 +729,12 @@ mod tests {
             Command::Pair { server, name: Some(name) } if server == "https://c.example" && name == "Mac"
         ));
         let cli = parse(&["--config-dir", "/tmp/x", "--log-format", "json", "run"]).unwrap();
-        assert!(matches!(cli.command, Command::Run(_)));
+        assert!(matches!(cli.command, Command::Run { service: false, .. }));
         assert_eq!(cli.config_dir, Some(PathBuf::from("/tmp/x")));
         assert!(cli.json_logs);
         assert!(matches!(parse(&[]).unwrap().command, Command::Help));
         assert!(matches!(parse(&["-V"]).unwrap().command, Command::Version));
-        let Command::Run(m) = parse(&[
+        let Command::Run { media: m, .. } = parse(&[
             "run",
             "--fps",
             "60",
@@ -579,7 +756,7 @@ mod tests {
             matches!(m.input, media::InputMode::Log),
             "test pattern never injects by default"
         );
-        let Command::Run(m) = parse(&[
+        let Command::Run { media: m, .. } = parse(&[
             "run",
             "--input",
             "native",
@@ -614,6 +791,43 @@ mod tests {
         assert!(
             parse(&["status", "--test-pattern"]).is_err(),
             "media flag on wrong command"
+        );
+        assert!(parse(&["run", "--input", "telepathy"]).is_err());
+        assert!(parse(&["unattended"]).is_err(), "needs on/off");
+        assert!(parse(&["unattended", "off", "--pin"]).is_err());
+        assert!(parse(&["status", "--pin"]).is_err());
+        assert!(matches!(
+            parse(&["unattended", "on", "--pin"]).unwrap().command,
+            Command::Unattended {
+                enable: true,
+                pin: true
+            }
+        ));
+        assert!(matches!(
+            parse(&["setup", "--server", "https://c.example", "--no-browser"])
+                .unwrap()
+                .command,
+            Command::Setup {
+                open_browser: false,
+                install_service: true,
+                ..
+            }
+        ));
+        assert!(parse(&["setup"]).is_err(), "setup needs --server");
+        assert!(matches!(
+            parse(&["service", "install"]).unwrap().command,
+            Command::Service(ServiceAction::Install)
+        ));
+        assert!(parse(&["service"]).is_err());
+        assert!(matches!(
+            parse(&["run", "--service"]).unwrap().command,
+            Command::Run { service: true, .. }
+        ));
+        assert_eq!(
+            parse(&["--log-file", "/tmp/a.log", "status"])
+                .unwrap()
+                .log_file,
+            Some(PathBuf::from("/tmp/a.log"))
         );
     }
 

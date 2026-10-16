@@ -13,8 +13,9 @@ argon2 = "0.6.0"
 async-trait = "0.1.92"
 base64 = "0.23.1"
 bytes = "1.12.1"
+bzip2 = "0.6.1"
 carson-capture = { version = "0.1.0", path = "../carson-capture" }
-carson-encode = { version = "0.1.0", path = "../carson-encode" }
+carson-encode = { path = "../carson-encode", default-features = false, features = ["openh264-cisco"] }
 carson-hostui = { version = "0.1.0", path = "../carson-hostui" }
 carson-input = { version = "0.1.0", path = "../carson-input" }
 carson-proto = { path = "../carson-proto" }
@@ -36,6 +37,12 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 url = "2.5.8"
 webrtc = "0.21.1"
 
+[features]
+# Development builds compile OpenH264 from source as a fallback. Release builds use
+# `--no-default-features`: they only ever load Cisco's royalty-free binary.
+default = ["openh264-source"]
+openh264-source = ["carson-encode/openh264-source"]
+
 [lints]
 workspace = true
 
@@ -48,4 +55,5 @@ apple-native-keyring-store = { version = "1.0.2", features = ["keychain"] }
 windows-native-keyring-store = "1.1.0"
 
 [dev-dependencies]
+openh264 = { version = "0.9.8", default-features = false, features = ["libloading"] }
 tokio = { version = "1.53.3", features = ["test-util"] }

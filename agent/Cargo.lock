@@ -357,6 +357,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
+name = "bzip2"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f3a53fac24f34a81bc9954b5d6cfce0c21e18ec6959f44f56e8e90e4bb7c346c"
+dependencies = [
+ "libbz2-rs-sys",
+]
+
+[[package]]
 name = "carson-agent"
 version = "0.1.0"
 dependencies = [
@@ -367,6 +376,7 @@ dependencies = [
  "async-trait",
  "base64 0.23.1",
  "bytes",
+ "bzip2",
  "carson-capture",
  "carson-encode",
  "carson-hostui",
@@ -378,6 +388,7 @@ dependencies = [
  "gethostname",
  "getrandom 0.4.3",
  "keyring-core",
+ "openh264",
  "reqwest",
  "rpassword",
  "rtc",
@@ -1459,6 +1470,12 @@ name = "lazy_static"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20870f649af7073d53e38067b2a84312175d56ea15217e1b15bc83506ec50afb"
+
+[[package]]
+name = "libbz2-rs-sys"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34b357333733e8260735ba5894eb928c02ecc69c78715f01a8019e7fa7f2db4c"
 
 [[package]]
 name = "libc"
