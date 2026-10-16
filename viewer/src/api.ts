@@ -75,6 +75,8 @@ export const api = {
   devices: () => request<{ devices: Device[] }>("GET", "/v1/devices").then((r) => r.devices),
   pairLookup: (code: string) => request<PairingPreview>("POST", "/v1/pair/lookup", { code }),
   pairApprove: (code: string) => request<Device>("POST", "/v1/pair/approve", { code }),
+  /** Browser sign-in: a one-time grant the page hands to the agent on 127.0.0.1. */
+  pairGrant: (pairingId: string) => request<{ grant: string; name: string; os: string }>("POST", "/v1/pair/grant", { pairing_id: pairingId }),
   revokeDevice: (id: string) => request<void>("POST", `/v1/devices/${encodeURIComponent(id)}/revoke`, {}),
   audit: (before?: number) =>
     request<{ events: AuditEvent[] }>("GET", `/v1/audit?limit=100${before ? `&before=${before}` : ""}`).then((r) => r.events),

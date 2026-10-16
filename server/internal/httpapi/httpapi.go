@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"carson/server/internal/audit"
@@ -91,7 +92,7 @@ func New(cfg config.Config, st *store.Store, log *slog.Logger) *Server {
 	devSvc.OnRevoke = ws.RevokeDevice
 	mux.Handle("GET /v1/ws", ws)
 	if cfg.WebDir != "" {
-		mux.Handle("GET /", http.FileServer(http.Dir(cfg.WebDir)))
+		mux.Handle("GET /", webHandler(cfg.WebDir))
 	}
 
 	// Coarse per-IP guard in front of everything; endpoint limits above are much tighter.
@@ -147,5 +148,20 @@ func logRequests(log *slog.Logger, next http.Handler) http.Handler {
 			slog.Int("status", rec.status),
 			slog.Duration("dur", time.Since(start)),
 		)
+	})
+}
+
+// webHandler serves the built viewer. Hashed assets (assets/index-abc123.js) never change, so
+// they are cached for a year; everything else (index.html) is revalidated on every load so a
+// deploy is picked up immediately.
+func webHandler(dir string) http.Handler {
+	files := http.FileServer(http.Dir(dir))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/assets/") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			w.Header().Set("Cache-Control", "no-cache")
+		}
+		files.ServeHTTP(w, r)
 	})
 }

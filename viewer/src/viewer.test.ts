@@ -112,3 +112,17 @@ describe("loginUrl", () => {
     expect(loginUrl("github", "/#/pair?code=AB")).toBe("/auth/github/login?return_to=%2F%23%2Fpair%3Fcode%3DAB");
   });
 });
+
+describe("browser sign-in hand-off", () => {
+  it("only targets 127.0.0.1 on a high port with a hex state", async () => {
+    const { loopbackUrl } = await import("./pages/connect");
+    const p = (q: string) => new URLSearchParams(q);
+    expect(loopbackUrl(p("port=50123&state=0123456789abcdef0123456789abcdef"), "g/1")).toBe(
+      "http://127.0.0.1:50123/done?state=0123456789abcdef0123456789abcdef&grant=g%2F1",
+    );
+    expect(loopbackUrl(p("port=80&state=0123456789abcdef"), "g")).toBeNull();
+    expect(loopbackUrl(p("port=50123&state=evil.example"), "g")).toBeNull();
+    expect(loopbackUrl(p("port=50123.5&state=0123456789abcdef"), "g")).toBeNull();
+    expect(loopbackUrl(p("state=0123456789abcdef"), "g")).toBeNull();
+  });
+});
