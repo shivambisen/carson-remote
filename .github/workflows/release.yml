@@ -42,6 +42,7 @@ jobs:
           mkdir -p "dist/$NAME"
           cp agent/target/release/carson-agent.exe packaging/windows/install.ps1 "dist/$NAME/"
           cp packaging/README-agent.txt "dist/$NAME/README.txt"
+          cp LICENSE "dist/$NAME/"
           (cd dist && 7z a "$NAME.zip" "$NAME" >/dev/null && sha256sum "$NAME.zip" > "$NAME.zip.sha256" && rm -rf "$NAME")
       - uses: actions/upload-artifact@v4
         with: { name: agent-windows, path: dist/* }

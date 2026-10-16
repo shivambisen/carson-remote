@@ -131,3 +131,9 @@ applies only to its own binaries, which `setup` downloads from Cisco).
 ## Status
 
 All eight milestones (M1–M8) are implemented; see the milestone table and as-built notes in [the design doc](docs/carson-design.md). Known gaps are listed there and in the host OS table above.
+
+## License
+
+carson is free and open source under the [Apache License 2.0](LICENSE). The OpenH264 codec
+that `setup` downloads is Cisco's binary under Cisco's own license, not part of this project
+("OpenH264 Video Codec provided by Cisco Systems, Inc.").

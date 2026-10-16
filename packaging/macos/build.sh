@@ -23,6 +23,7 @@ NAME="carson-agent-$VERSION-macos-$ARCH"
 STAGE=$(mktemp -d); mkdir "$STAGE/$NAME"
 cp "$BIN" "$STAGE/$NAME/"
 cp "$ROOT/packaging/README-agent.txt" "$STAGE/$NAME/README.txt"
+cp "$ROOT/LICENSE" "$STAGE/$NAME/"
 tar -C "$STAGE" -czf "$OUT/$NAME.tar.gz" "$NAME"
 rm -rf "$STAGE"
 (cd "$OUT" && shasum -a 256 "$NAME.tar.gz" > "$NAME.tar.gz.sha256")

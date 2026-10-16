@@ -5,7 +5,7 @@ class CarsonAgent < Formula
   desc "Free remote desktop: view and control your own computers from your browser"
   homepage "https://github.com/OWNER/carson"
   version "0.1.0"
-  license "UNLICENSED" # update when the project picks a license
+  license "Apache-2.0"
 
   on_arm do
     url "https://github.com/OWNER/carson/releases/download/v#{version}/carson-agent-#{version}-macos-arm64.tar.gz"
