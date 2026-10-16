@@ -21,6 +21,31 @@ REL="target/$TARGET/release"
 OUT="$ROOT/dist"; mkdir -p "$OUT"
 STAGE=$(mktemp -d)
 
+# Signing identity. With MACOS_SIGN_P12_BASE64/_PASSWORD (a fixed self-signed certificate,
+# GitHub secrets), every release has the same designated requirement, so macOS keeps Screen
+# Recording / Accessibility permissions across updates. Without them: ad-hoc signing (each build
+# looks like a new app to macOS). Neither is notarized: Gatekeeper still asks once.
+SIGN=-
+SIGN_ARGS=()
+if [ -n "${MACOS_SIGN_P12_BASE64:-}" ]; then
+  KC="$STAGE/sign.keychain-db"
+  KCPW=$(openssl rand -hex 16)
+  echo "$MACOS_SIGN_P12_BASE64" | base64 --decode > "$STAGE/sign.p12"
+  security create-keychain -p "$KCPW" "$KC"
+  security set-keychain-settings "$KC"
+  security unlock-keychain -p "$KCPW" "$KC"
+  security import "$STAGE/sign.p12" -k "$KC" -P "$MACOS_SIGN_P12_PASSWORD" -T /usr/bin/codesign >/dev/null
+  security set-key-partition-list -S apple-tool:,apple: -s -k "$KCPW" "$KC" >/dev/null
+  # codesign only uses trusted identities; trust this one for code signing (CI runner only).
+  openssl pkcs12 -in "$STAGE/sign.p12" -nokeys -passin "pass:$MACOS_SIGN_P12_PASSWORD" -legacy 2>/dev/null > "$STAGE/sign.pem" ||
+    openssl pkcs12 -in "$STAGE/sign.p12" -nokeys -passin "pass:$MACOS_SIGN_P12_PASSWORD" > "$STAGE/sign.pem"
+  sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain "$STAGE/sign.pem"
+  rm -f "$STAGE/sign.p12"
+  SIGN="glenley self-signed"
+  SIGN_ARGS=(--keychain "$KC")
+  echo "signing with the fixed glenley certificate"
+fi
+
 # glenley.app: menu-bar only (LSUIElement), screen-capture purpose string for the permission prompt.
 APP="$STAGE/glenley.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
@@ -48,8 +73,9 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 cp "$ROOT/LICENSE" "$APP/Contents/"
-codesign --force --deep --sign - --identifier in.glenley.agent "$APP"
+codesign --force --deep --sign "$SIGN" ${SIGN_ARGS[@]+"${SIGN_ARGS[@]}"} --identifier in.glenley.agent "$APP"
 codesign --verify --deep "$APP"
+codesign -d -r- "$APP" 2>&1 | grep designated
 APPZIP="glenley-$VERSION-macos-$ARCH.zip"
 (cd "$STAGE" && ditto -c -k --keepParent glenley.app "$OUT/$APPZIP")
 
@@ -57,7 +83,7 @@ APPZIP="glenley-$VERSION-macos-$ARCH.zip"
 NAME="glenley-agent-$VERSION-macos-$ARCH"
 mkdir "$STAGE/$NAME"
 cp "$REL/glenley-agent" "$STAGE/$NAME/"
-codesign --force --sign - --identifier in.glenley.agent "$STAGE/$NAME/glenley-agent"
+codesign --force --sign "$SIGN" ${SIGN_ARGS[@]+"${SIGN_ARGS[@]}"} --identifier in.glenley.agent "$STAGE/$NAME/glenley-agent"
 cp "$ROOT/packaging/README-agent.txt" "$STAGE/$NAME/README.txt"
 cp "$ROOT/LICENSE" "$STAGE/$NAME/"
 tar -C "$STAGE" -czf "$OUT/$NAME.tar.gz" "$NAME"

@@ -136,6 +136,7 @@
       <h2>Permissions</h2>
       <div class="perm"><span class="label">Screen Recording</span><span id="p-screen"></span><button class="ghost small hidden" id="fix-screen">Allow…</button></div>
       <div class="perm"><span class="label">Accessibility (mouse &amp; keyboard)</span><span id="p-access"></span><button class="ghost small hidden" id="fix-access">Allow…</button></div>
+      <p class="hint hidden" id="perm-hint" style="text-align:left">Already switched on in System Settings? macOS only notices after glenley restarts: <button class="link" id="restart" style="padding:0">quit and reopen glenley</button>. After an update, remove the old glenley entry there (−) and allow it again.</p>
     </div>
     <div class="card">
       <h2>Settings</h2>
@@ -166,6 +167,7 @@
   $("leave").onclick = () => { if (confirm("Remove this computer from its account? It can't be reached until it's set up again.")) send({ cmd: "leave" }); };
   $("fix-screen").onclick = () => send({ cmd: "permission", which: "screen" });
   $("fix-access").onclick = () => send({ cmd: "permission", which: "accessibility" });
+  $("restart").onclick = () => send({ cmd: "restart" });
   for (const b of document.querySelectorAll("#once-choice button")) {
     b.onclick = () => { once = b.dataset.once === "1"; for (const x of document.querySelectorAll("#once-choice button")) x.classList.toggle("sel", x === b); };
   }
@@ -199,7 +201,11 @@
         show(fix, !ok);
       };
       show("perms", s.permissions !== null);
-      if (s.permissions) { perm("p-screen", "fix-screen", s.permissions.screen); perm("p-access", "fix-access", s.permissions.accessibility); }
+      if (s.permissions) {
+        perm("p-screen", "fix-screen", s.permissions.screen);
+        perm("p-access", "fix-access", s.permissions.accessibility);
+        show("perm-hint", !s.permissions.screen || !s.permissions.accessibility);
+      }
       for (const sw of document.querySelectorAll(".switch")) sw.classList.toggle("on", !!s.settings[sw.dataset.key]);
     },
   };

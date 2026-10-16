@@ -563,6 +563,12 @@ impl App {
                 self.reload_settings();
             }
             "permission" => open_permission_settings(text("which") == Some("screen")),
+            "restart" => {
+                // macOS re-checks permissions only for a new process: start a fresh copy, then
+                // quit this one (the new copy starts once this one is gone).
+                restart_self();
+                return true;
+            }
             _ => {}
         }
         false
@@ -652,6 +658,34 @@ fn set_dock_icon(target: &EventLoopWindowTarget<UserEvent>, visible: bool) {
     }
     #[cfg(not(target_os = "macos"))]
     let _ = (target, visible);
+}
+
+/// Starts a new copy of the app shortly after this one quits.
+fn restart_self() {
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    #[cfg(target_os = "macos")]
+    let spawned = {
+        // Relaunch through the .app bundle, which is what macOS grants permissions to.
+        let bundle = exe
+            .ancestors()
+            .nth(3)
+            .filter(|p| p.extension().is_some_and(|e| e == "app"))
+            .map(Path::to_path_buf);
+        let (script, arg) = match bundle {
+            Some(app) => ("sleep 1; open -n \"$0\"", app),
+            None => ("sleep 1; \"$0\" app", exe.clone()),
+        };
+        std::process::Command::new("/bin/sh")
+            .args(["-c", script, &arg.display().to_string()])
+            .spawn()
+    };
+    #[cfg(not(target_os = "macos"))]
+    let spawned = std::process::Command::new(&exe).arg("app").spawn();
+    if let Err(e) = spawned {
+        tracing::warn!(error = %e, "could not restart glenley");
+    }
 }
 
 /// macOS: ask for the permission (the system prompt appears once) and open its settings pane.
