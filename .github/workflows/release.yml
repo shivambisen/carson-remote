@@ -26,6 +26,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with: { targets: "${{ matrix.target }}" }
       - run: packaging/macos/build.sh ${{ matrix.target }}
+        env: { CARSON_DEFAULT_SERVER: "${{ vars.CARSON_DEFAULT_SERVER }}" }
       - uses: actions/upload-artifact@v4
         with: { name: "agent-${{ matrix.target }}", path: dist/* }
 
@@ -37,13 +38,21 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Build (no source-compiled OpenH264)
         working-directory: agent
-        run: cargo build --release -p carson-agent --no-default-features
-      - name: Package
+        env: { CARSON_DEFAULT_SERVER: "${{ vars.CARSON_DEFAULT_SERVER }}" }
+        run: cargo build --release -p carson-agent --bins --no-default-features
+      - name: Installer (Inno Setup)
+        run: |
+          VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' agent/Cargo.toml | head -1)
+          ISCC="/c/Program Files (x86)/Inno Setup 6/ISCC.exe"
+          [ -x "$ISCC" ] || { choco install innosetup -y --no-progress >/dev/null; }
+          "$ISCC" //Qp //DVersion=$VERSION packaging/windows/carson.iss
+          (cd dist && sha256sum carson-setup-*.exe > "carson-setup-$VERSION-windows-x86_64.exe.sha256")
+      - name: Package CLI zip
         run: |
           VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' agent/Cargo.toml | head -1)
           NAME=carson-agent-$VERSION-windows-x86_64
           mkdir -p "dist/$NAME"
-          cp agent/target/release/carson-agent.exe packaging/windows/install.ps1 "dist/$NAME/"
+          cp agent/target/release/carson-agent.exe agent/target/release/carson.exe packaging/windows/install.ps1 "dist/$NAME/"
           cp packaging/README-agent.txt "dist/$NAME/README.txt"
           cp LICENSE "dist/$NAME/"
           (cd dist && 7z a "$NAME.zip" "$NAME" >/dev/null && sha256sum "$NAME.zip" > "$NAME.zip.sha256" && rm -rf "$NAME")

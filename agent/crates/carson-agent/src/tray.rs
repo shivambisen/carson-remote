@@ -57,7 +57,13 @@ pub fn run(dir: PathBuf, server: Option<String>) -> Result<()> {
         })
         .context("start agent thread")?;
 
-    let mut ui = Ui::new(&dir, server)?;
+    let mut ui = Ui::new(&dir, server.clone())?;
+    // First launch: go straight to the browser sign-in instead of waiting for a click.
+    let unpaired = matches!(config::load(&dir), Ok(None));
+    if unpaired && (server.is_some() || DEFAULT_SERVER.is_some()) {
+        ui.signing_in = true;
+        let _ = cmd_tx.send(Cmd::SignIn);
+    }
     let result = event_loop(|| ui.tick(&dir, &cmd_tx, &note_rx));
     let _ = cmd_tx.send(Cmd::Quit);
     let _ = agent.join();
