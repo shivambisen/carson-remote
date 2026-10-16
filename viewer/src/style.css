@@ -74,3 +74,5 @@ label.toggle { display: inline-flex; gap: 6px; align-items: center; font-size: 1
 form.pin { position: absolute; display: flex; flex-direction: column; gap: 10px; width: min(320px, 90%); padding: 20px; border-radius: 12px; background: var(--card); border: 1px solid var(--border); color: var(--text); }
 form.pin h2 { margin: 0; font-size: 18px; }
 form.pin input { font-size: 22px; letter-spacing: 6px; text-align: center; }
+.overlay.dim { background: rgba(0, 0, 0, 0.35); }
+.status.reconnecting { color: #e0a800; }

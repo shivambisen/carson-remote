@@ -5,7 +5,7 @@ import { osLabel, timeAgo } from "./format";
 import { formatCode, isCompleteCode } from "./pairing";
 import { FrameCoalescer, InputRouter, isViewerShortcut } from "./control";
 import { normalizePoint, wheelPixels } from "./input";
-import { describeReason, ViewerSession } from "./session";
+import { describeReason, ViewerSession, type SessionOptions } from "./session";
 import { PresenceClient, type ConnectionStatus } from "./signaling";
 import { summarize, type StatsSample } from "./stats";
 
@@ -151,7 +151,7 @@ function showDevices(): void {
   presence.start();
 }
 
-function showView(deviceId: string): void {
+function showView(deviceId: string, options: SessionOptions = {}): void {
   stopPresence();
   stopViewing();
   const video = h("video", { autoplay: true, playsinline: true, muted: true, class: "screen" });
@@ -224,7 +224,14 @@ function showView(deviceId: string): void {
         overlay.hidden = false;
         overlay.textContent = s.detail;
         statusEl.textContent = "Connecting";
+      } else if (s.kind === "reconnecting") {
+        overlay.hidden = false;
+        overlay.classList.add("dim");
+        overlay.textContent = s.detail;
+        statusEl.textContent = "Reconnecting";
+        statusEl.className = "status reconnecting";
       } else if (s.kind === "live") {
+        overlay.classList.remove("dim");
         overlay.hidden = true;
         statusEl.textContent = "Live";
         statusEl.className = "status live";
@@ -275,7 +282,7 @@ function showView(deviceId: string): void {
       if (document.hasFocus()) void writeLocalClipboard(text);
       else pendingClipboard = text;
     },
-  });
+  }, options);
   displaySelect.addEventListener("change", () => session.selectDisplay(Number(displaySelect.value)));
   pinForm.addEventListener("submit", (e) => {
     e.preventDefault();
@@ -488,7 +495,7 @@ async function route(): Promise<void> {
     }
   }
   if (r.page === "pair") showPair(r.params);
-  else if (r.page === "view" && r.deviceId) showView(r.deviceId);
+  else if (r.page === "view" && r.deviceId) showView(r.deviceId, { forceRelay: r.params.get("relay") === "1" });
   else showDevices();
 }
 

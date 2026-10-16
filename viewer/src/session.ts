@@ -2,6 +2,7 @@
  * One view-only session with a device: signaling over the carson WebSocket, media over
  * WebRTC. The agent offers (it owns the video track); the browser answers.
  */
+import { Backoff } from "./backoff";
 import { ClipboardAssembler, decodeClipboardChunk, encode, type InputMessage } from "./input";
 import { PROTOCOL_VERSION, signalingUrl, type Envelope } from "./signaling";
 
@@ -28,10 +29,21 @@ export interface SessionCallbacks {
 
 /** Pointer moves are dropped (not queued) when the unreliable channel backs up. */
 const MAX_POINTER_BUFFER = 16 * 1024;
+/** A disconnected media path gets this long to recover before we ask for an ICE restart. */
+const ICE_RESTART_DELAY_MS = 2000;
+/** Without media for this long, the session is over (matches the agent and server). */
+const MEDIA_LOSS_TIMEOUT_MS = 30_000;
+
+export interface SessionOptions {
+  /** Only use TURN relay candidates (diagnostics: proves the relay path works). */
+  forceRelay?: boolean;
+}
 
 export type SessionState =
   | { kind: "connecting"; detail: string }
   | { kind: "live" }
+  /** The media path dropped; recovering (ICE restart / signaling resume). Video may freeze. */
+  | { kind: "reconnecting"; detail: string }
   | { kind: "ended"; reason: string; message?: string };
 
 interface IceServer {
@@ -48,7 +60,9 @@ const REASONS: Record<string, string> = {
   busy: "Someone is already viewing that device.",
   rate_limited: "Too many connection attempts. Wait a minute and try again.",
   peer_disconnected: "The other computer disconnected.",
-  connection_failed: "The direct connection failed. (Relay fallback for strict networks arrives in a later version.)",
+  connection_failed: "Could not connect to the other computer, even through the relay.",
+  connection_lost: "The connection was lost and could not be recovered within 30 seconds.",
+  resume_failed: "The session could not be resumed after the connection dropped.",
   connect_timeout: "The connection timed out.",
   agent_error: "The agent hit an error and ended the session.",
   user: "Session ended.",
@@ -76,11 +90,17 @@ export class ViewerSession {
   private ctl: RTCDataChannel | null = null;
   private readonly clipboard = new ClipboardAssembler();
   private readonly onState: (s: SessionState) => void;
+  private resumeToken: string | null = null;
+  private readonly wsBackoff = new Backoff();
+  private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  private restartTimer: ReturnType<typeof setTimeout> | undefined;
+  private lostTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
     private readonly deviceId: string,
     private readonly video: HTMLVideoElement,
     private readonly callbacks: SessionCallbacks,
+    private readonly options: SessionOptions = {},
   ) {
     this.onState = callbacks.onState;
   }
@@ -114,8 +134,17 @@ export class ViewerSession {
 
   start(): void {
     this.onState({ kind: "connecting", detail: "Contacting server…" });
+    this.connectSignaling();
+  }
+
+  /**
+   * Opens the signaling socket. If it drops after the session exists, we reconnect and
+   * resume (the server holds the session for 30 s); media keeps flowing peer-to-peer meanwhile.
+   */
+  private connectSignaling(): void {
     const ws = new WebSocket(signalingUrl(location.origin));
     this.ws = ws;
+    ws.onopen = () => this.wsBackoff.reset();
     ws.onmessage = (ev: MessageEvent<string>) => {
       let env: Envelope;
       try {
@@ -126,7 +155,12 @@ export class ViewerSession {
       void this.handle(env).catch((err: unknown) => this.end("agent_error", String(err)));
     };
     ws.onclose = () => {
-      if (!this.ended && this.pc?.connectionState !== "connected") this.end("peer_disconnected");
+      if (this.ended || this.ws !== ws) return;
+      if (!this.sid || !this.resumeToken) {
+        this.end("peer_disconnected"); // no session to resume yet
+        return;
+      }
+      this.reconnectTimer = setTimeout(() => this.connectSignaling(), this.wsBackoff.next());
     };
   }
 
@@ -154,13 +188,25 @@ export class ViewerSession {
     const ours = env.sid ? env.sid === this.sid : env.id === this.requestId;
     switch (env.type) {
       case "hello.ok":
+        if (this.sid && this.resumeToken) {
+          this.send("session.resume", { token: this.resumeToken });
+          return;
+        }
         this.send("session.request", { device_id: this.deviceId }, this.requestId);
         this.onState({ kind: "connecting", detail: "Asking the device…" });
         return;
+      case "session.resume": {
+        if (!ours) return;
+        const r = env.body as { resumed?: boolean };
+        if (!r.resumed) return this.end("resume_failed");
+        if (this.pc && this.pc.connectionState !== "connected") this.send("session.ice_restart", {});
+        return;
+      }
       case "turn.creds": {
         if (env.id !== this.requestId) return;
         this.sid = env.sid ?? null;
-        const { ice_servers } = env.body as { ice_servers: IceServer[] };
+        const { ice_servers, resume_token } = env.body as { ice_servers: IceServer[]; resume_token?: string };
+        this.resumeToken = resume_token ?? null;
         this.createPeer(ice_servers);
         this.onState({ kind: "connecting", detail: "Waiting for the other computer to allow the connection…" });
         return;
@@ -197,7 +243,7 @@ export class ViewerSession {
   }
 
   private createPeer(iceServers: IceServer[]): void {
-    const pc = new RTCPeerConnection({ iceServers });
+    const pc = new RTCPeerConnection({ iceServers, iceTransportPolicy: this.options.forceRelay ? "relay" : "all" });
     this.pc = pc;
     pc.onicecandidate = (ev) => {
       if (ev.candidate) this.send("ice.candidate", ev.candidate.toJSON());
@@ -220,12 +266,38 @@ export class ViewerSession {
       this.video.srcObject = ev.streams[0] ?? new MediaStream([ev.track]);
       void this.video.play().catch(() => {});
     };
+    let everConnected = false;
     pc.onconnectionstatechange = () => {
-      if (pc.connectionState === "connected") this.onState({ kind: "live" });
-      else if (pc.connectionState === "failed") {
-        this.send("session.end", { reason: "connection_failed" });
-        this.end("connection_failed");
+      const state = pc.connectionState;
+      if (state === "connected") {
+        everConnected = true;
+        clearTimeout(this.restartTimer);
+        clearTimeout(this.lostTimer);
+        this.lostTimer = undefined;
+        this.onState({ kind: "live" });
+        return;
       }
+      if (state !== "disconnected" && state !== "failed") return;
+      if (!everConnected) {
+        if (state === "failed") {
+          this.send("session.end", { reason: "connection_failed" });
+          this.end("connection_failed");
+        }
+        return;
+      }
+      // Media path lost: ask the agent (the offerer) to restart ICE, and give up after 30 s.
+      this.onState({ kind: "reconnecting", detail: "Connection interrupted, reconnecting…" });
+      if (this.lostTimer === undefined) {
+        this.lostTimer = setTimeout(() => {
+          this.send("session.end", { reason: "connection_lost" });
+          this.end("connection_lost");
+        }, MEDIA_LOSS_TIMEOUT_MS);
+      }
+      clearTimeout(this.restartTimer);
+      this.restartTimer = setTimeout(
+        () => this.send("session.ice_restart", {}),
+        state === "failed" ? 0 : ICE_RESTART_DELAY_MS,
+      );
     };
   }
 
@@ -247,6 +319,9 @@ export class ViewerSession {
   private end(reason: string, message?: string): void {
     if (this.ended) return;
     this.ended = true;
+    clearTimeout(this.reconnectTimer);
+    clearTimeout(this.restartTimer);
+    clearTimeout(this.lostTimer);
     this.pc?.close();
     this.ws?.close(1000, "session over");
     this.video.srcObject = null;
