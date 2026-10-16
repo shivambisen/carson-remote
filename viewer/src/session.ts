@@ -64,6 +64,7 @@ const REASONS: Record<string, string> = {
   unknown_device: "That device is not on your account.",
   busy: "Someone is already viewing that device.",
   rate_limited: "Too many connection attempts. Wait a minute and try again.",
+  payment_required: "Get glenley for this account to connect (₹99, once).",
   peer_disconnected: "The other computer disconnected.",
   connection_failed: "Could not connect to the other computer, even through the relay.",
   connection_lost: "The connection was lost and could not be recovered within 30 seconds.",

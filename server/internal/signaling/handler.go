@@ -42,6 +42,8 @@ type Handler struct {
 	PingTimeout  time.Duration
 	// ViewerPingInterval keeps idle viewer sockets alive through proxies (0: PingInterval).
 	ViewerPingInterval time.Duration
+	// Access, if set, decides whether a user may start sessions (e.g. has paid).
+	Access func(ctx context.Context, userID string) (bool, error)
 	// ICE issues STUN/TURN servers (with time-limited TURN credentials) per session.
 	ICE *turn.Issuer
 	// ResumeWindow is how long a session waits for a dropped party (default 30 s).

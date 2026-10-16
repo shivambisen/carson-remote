@@ -67,6 +67,8 @@ type Service struct {
 	Audit      *audit.Log
 	// OnRevoke disconnects a revoked device's agent and ends its sessions (signaling hub).
 	OnRevoke func(deviceID string)
+	// Access, if set, decides whether a user may add computers (e.g. has paid).
+	Access func(ctx context.Context, userID string) (bool, error)
 
 	mu         sync.Mutex
 	challenges map[string]challenge // nonce → challenge
@@ -274,7 +276,7 @@ func (s *Service) handlePairLookup(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) handlePairApprove(w http.ResponseWriter, r *http.Request) {
 	u, code, ok := s.codeRequest(w, r)
-	if !ok {
+	if !ok || !s.requireAccess(w, r, u.ID) {
 		return
 	}
 	d, err := s.Store.ApprovePairing(r.Context(), codeHash(code), u.ID, s.Now())
@@ -297,8 +299,27 @@ func (s *Service) handlePairApprove(w http.ResponseWriter, r *http.Request) {
 // on 127.0.0.1, and only the agent presenting it (handlePairComplete) creates the device.
 // A link to someone else's pairing is therefore useless: the grant would go to the victim's
 // own loopback, where no agent is waiting for it.
+// requireAccess writes 402 and returns false if the user may not add computers yet.
+func (s *Service) requireAccess(w http.ResponseWriter, r *http.Request, userID string) bool {
+	if s.Access == nil {
+		return true
+	}
+	ok, err := s.Access(r.Context(), userID)
+	if err != nil {
+		s.internal(w, "check access", err)
+		return false
+	}
+	if !ok {
+		httpx.WriteError(w, http.StatusPaymentRequired, "payment_required", "get glenley for this account to add computers")
+	}
+	return ok
+}
+
 func (s *Service) handlePairGrant(w http.ResponseWriter, r *http.Request) {
 	u, _ := auth.UserFrom(r.Context())
+	if !s.requireAccess(w, r, u.ID) {
+		return
+	}
 	if !s.Limits.PairCode.Allow("user:"+u.ID) || !s.Limits.PairCode.Allow("ip:"+s.ip(r)) {
 		tooMany(w)
 		return

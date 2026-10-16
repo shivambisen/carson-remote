@@ -255,3 +255,34 @@ func TestRevokeDevice(t *testing.T) {
 		t.Fatal("double revoke should report not found")
 	}
 }
+
+func TestPurchases(t *testing.T) {
+	s, ctx := newStore(t), context.Background()
+	u, _ := s.UpsertUserForIdentity(ctx, Identity{Provider: "dev", Subject: "a", Email: "a@x.com"}, t0)
+	if paid, _ := s.HasPaid(ctx, u.ID); paid {
+		t.Fatal("new user has not paid")
+	}
+	if err := s.CreatePurchase(ctx, Purchase{OrderID: "order_1", UserID: u.ID, Amount: 9900, Currency: "INR", CreatedAt: t0}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreatePurchase(ctx, Purchase{OrderID: "order_1", UserID: u.ID, Amount: 9900, Currency: "INR", CreatedAt: t0}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("duplicate order = %v", err)
+	}
+	if paid, _ := s.HasPaid(ctx, u.ID); paid {
+		t.Fatal("an unpaid order grants nothing")
+	}
+	p, err := s.MarkPurchasePaid(ctx, "order_1", "pay_1", t0.Add(time.Minute))
+	if err != nil || p.Status != "paid" || p.PaymentID != "pay_1" || p.UserID != u.ID {
+		t.Fatalf("mark paid = %+v %v", p, err)
+	}
+	again, _ := s.MarkPurchasePaid(ctx, "order_1", "pay_2", t0.Add(time.Hour))
+	if again.PaymentID != "pay_1" {
+		t.Fatal("a repeated notification must keep the first payment")
+	}
+	if paid, _ := s.HasPaid(ctx, u.ID); !paid {
+		t.Fatal("paid user")
+	}
+	if _, err := s.MarkPurchasePaid(ctx, "order_unknown", "pay", t0); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown order = %v", err)
+	}
+}

@@ -12,6 +12,7 @@ import (
 
 	"carson/server/internal/audit"
 	"carson/server/internal/auth"
+	"carson/server/internal/billing"
 	"carson/server/internal/config"
 	"carson/server/internal/devices"
 	"carson/server/internal/httpx"
@@ -61,6 +62,16 @@ func New(cfg config.Config, st *store.Store, log *slog.Logger) *Server {
 		},
 	}
 
+	billingSvc := &billing.Service{
+		Store: st, Auth: authSvc, KeyID: cfg.RazorpayKeyID, KeySecret: cfg.RazorpayKeySecret,
+		WebhookSecret: cfg.RazorpayWebhookSecret, Amount: cfg.PricePaise, Currency: "INR",
+		Log: log, Now: now, Audit: auditLog, OrderLimiter: ratelimit.New(10, time.Minute, 5),
+	}
+	if billingSvc.Enabled() {
+		devSvc.Access = billingSvc.HasAccess
+		log.Info("payments enabled", "price_paise", cfg.PricePaise)
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -79,6 +90,7 @@ func New(cfg config.Config, st *store.Store, log *slog.Logger) *Server {
 	})
 	authSvc.Routes(mux)
 	devSvc.Routes(mux)
+	billingSvc.Routes(mux)
 	ws := &signaling.Handler{
 		Hub: hub, Store: st, Auth: authSvc, Devices: devSvc, Log: log, Now: now,
 		PingInterval: 15 * time.Second, PingTimeout: 30 * time.Second,
@@ -90,6 +102,9 @@ func New(cfg config.Config, st *store.Store, log *slog.Logger) *Server {
 		Audit:          auditLog,
 	}
 	devSvc.OnRevoke = ws.RevokeDevice
+	if billingSvc.Enabled() {
+		ws.Access = billingSvc.HasAccess
+	}
 	mux.Handle("GET /v1/ws", ws)
 	if cfg.WebDir != "" {
 		mux.Handle("GET /", webHandler(cfg.WebDir))
@@ -113,7 +128,14 @@ func securityHeaders(next http.Handler) http.Handler {
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Referrer-Policy", "no-referrer")
-		h.Set("Content-Security-Policy", "default-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+		// Google Fonts for the typefaces; Razorpay Checkout (script, its frame and API calls).
+		h.Set("Content-Security-Policy", "default-src 'self'; "+
+			"script-src 'self' https://*.razorpay.com; "+
+			"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "+
+			"font-src 'self' https://fonts.gstatic.com; "+
+			"connect-src 'self' https://*.razorpay.com; "+
+			"frame-src https://*.razorpay.com; "+
+			"img-src 'self' data: https://*.razorpay.com; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
 		next.ServeHTTP(w, r)
 	})
 }

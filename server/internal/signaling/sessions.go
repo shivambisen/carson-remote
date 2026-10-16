@@ -387,6 +387,12 @@ func (h *Handler) startSession(c *client, viewer protocol.ViewerInfo, env protoc
 		return
 	}
 	ownedDevice = d.ID
+	if h.Access != nil {
+		if ok, err := h.Access(ctx, c.userID); err != nil || !ok {
+			reject(protocol.ReasonPaymentRequired, "get glenley for this account to connect")
+			return
+		}
+	}
 	s, viewerToken, agentToken, err := h.Hub.createSession(c, d.ID, viewer, h.Now())
 	switch {
 	case errors.Is(err, store.ErrNotFound):

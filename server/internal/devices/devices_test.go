@@ -490,3 +490,17 @@ func TestBrowserSignInPairing(t *testing.T) {
 		t.Fatalf("expired grant = %d", code)
 	}
 }
+
+func TestUnpaidAccountsCannotAddComputers(t *testing.T) {
+	e := newEnv(t)
+	e.svc.Access = func(context.Context, string) (bool, error) { return false, nil }
+	ana := e.user(t, "ana@x.com")
+	pub, _, _ := ed25519.GenerateKey(nil)
+	s := e.startPairing(t, pub)
+	if code, _ := e.call(t, ana, "/v1/pair/grant", map[string]string{"pairing_id": s.PairingID}, nil); code != http.StatusPaymentRequired {
+		t.Fatalf("grant without paying = %d", code)
+	}
+	if code, _ := e.call(t, ana, "/v1/pair/approve", map[string]string{"code": s.UserCode}, nil); code != http.StatusPaymentRequired {
+		t.Fatalf("approve without paying = %d", code)
+	}
+}

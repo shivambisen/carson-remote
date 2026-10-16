@@ -16,6 +16,7 @@ const (
 	AuditSessionRejected = "session_rejected"
 	AuditSessionResumed  = "session_resumed"
 	AuditSessionEnded    = "session_ended"
+	AuditPurchased       = "purchased"
 )
 
 // AuditEvent is one row of the security log.

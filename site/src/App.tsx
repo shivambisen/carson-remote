@@ -78,6 +78,7 @@ function Nav({ platform }: { platform: Platform }) {
         <nav className="hidden items-center gap-7 text-[15px] text-ink/80 md:flex">
           <a href="#how" className="hover:text-ink">How it works</a>
           <a href="#private" className="hover:text-ink">Privacy</a>
+          <a href="#pricing" className="hover:text-ink">Pricing</a>
           <a href="#download" className="hover:text-ink">Download</a>
           <a href={SOURCE_URL} className="hover:text-ink">GitHub</a>
         </nav>
@@ -170,7 +171,7 @@ function Hero({ platform }: { platform: Platform }) {
           <span>anywhere.</span>
         </h1>
         <p className="mx-auto mt-7 max-w-xl text-[17px] leading-relaxed text-muted sm:text-lg">
-          glenley lets you see and control your own Mac or PC from any browser. Install it once, sign in, and it's always a click away. Free, open source, and encrypted end to end.
+          glenley lets you see and control your own Mac or PC from any browser. Install it once, sign in, and it's always a click away. Encrypted end to end. ₹99 once, yours for life.
         </p>
         <div className="mt-9 flex flex-col items-center justify-center gap-4 sm:flex-row">
           <DownloadButton platform={platform} />
@@ -195,7 +196,7 @@ function Hero({ platform }: { platform: Platform }) {
                   </a>
                 </>
               )}
-              {" · "}free forever
+              {" · "}₹99 once, no subscription
             </>
           )}
         </p>
@@ -455,26 +456,44 @@ function Features() {
         }
       />
       <Feature
-        eyebrow="Free"
+        id="pricing"
+        eyebrow="Pricing"
         title={
           <>
-            Free for everyone.
+            ₹99. Once.
             <br />
-            <span className="text-faint">Really.</span>
+            <span className="text-faint">Yours for life.</span>
           </>
         }
-        text="No subscription, no trial, no account limits. glenley is open source under the Apache 2.0 license: read the code, run your own server, or help improve it."
-        points={["Apache-2.0", "No ads", "No tracking", "Self-hostable"]}
-        visual={
-          <Panel>
-            <div className="text-white/40"># run your own glenley server</div>
-            <div>git clone {SOURCE_URL.replace("https://", "")}</div>
-            <div>sudo bash deploy/install-server.sh \</div>
-            <div>&nbsp;&nbsp;--domain remote.example.com</div>
-          </Panel>
-        }
+        text="No subscription and no renewals. Pay once with UPI, a card or netbanking, and use glenley on every computer you own, with every update. glenley is also open source under the Apache 2.0 license."
+        points={["One-time payment", "All your computers", "All future updates", "No ads, no tracking"]}
+        visual={<PriceCard />}
       />
     </section>
+  );
+}
+
+function PriceCard() {
+  return (
+    <div className="rounded-[20px] bg-white/70 p-2.5 soft ring-1 ring-black/5">
+      <div className="rounded-[14px] bg-white p-8">
+        <p className="text-sm font-medium text-muted">glenley · lifetime</p>
+        <p className="mt-3 font-serif text-6xl tracking-[-0.03em]">
+          ₹99 <span className="font-sans text-base text-muted">once</span>
+        </p>
+        <ul className="mt-6 space-y-2.5 text-[15px]">
+          {["Every computer you own", "Mac and Windows apps", "Connect from any browser", "End-to-end encrypted", "All future updates"].map((t) => (
+            <li key={t} className="flex items-center gap-2.5">
+              <Check className="size-4 text-accent" /> {t}
+            </li>
+          ))}
+        </ul>
+        <a href={APP_URL} className={`${btn("dark", "sm")} mt-7 w-full`}>
+          Get glenley <ArrowRight className="size-4" />
+        </a>
+        <p className="mt-3 text-center text-xs text-faint">Sign in, then pay with UPI, card or netbanking</p>
+      </div>
+    </div>
   );
 }
 
@@ -537,7 +556,8 @@ function Faq() {
   const qa: [string, string][] = [
     ["Does the person at the computer know I'm connected?", "Yes. glenley's icon in the menu bar or tray always changes while someone is connected. You can also turn on an on-screen indicator, or ask for approval before every connection."],
     ["Who can connect to my computer?", "Only the account it was added to. You can remove a computer from your account at any time, and every connection is listed under Activity."],
-    ["Is it really free?", "Yes. glenley is open-source software. The video codec on Windows is Cisco's free OpenH264 (OpenH264 Video Codec provided by Cisco Systems, Inc.)."],
+    ["How much does it cost?", "₹99, once. There's no subscription: one payment gives your account glenley on all your computers, with every future update. Payments are handled by Razorpay (UPI, cards, netbanking)."],
+    ["Is glenley open source?", "Yes, under the Apache 2.0 license. The video codec on Windows is Cisco's free OpenH264 (OpenH264 Video Codec provided by Cisco Systems, Inc.)."],
     ["What if my network is strict?", "glenley connects computers directly. Most home and mobile networks work. Some office networks block direct connections; a relay for those is on the way."],
   ];
   return (
@@ -567,7 +587,7 @@ function Footer() {
         <span className="flex items-center gap-2 font-medium text-ink">
           <Mark className="size-5" /> glenley
         </span>
-        <span>Free and open source · Apache-2.0</span>
+        <span>₹99 once · open source (Apache-2.0)</span>
         <div className="flex-1" />
         <a href={APP_URL} className="hover:text-ink">Connect</a>
         <a href="#download" className="hover:text-ink">Download</a>

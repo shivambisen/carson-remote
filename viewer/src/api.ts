@@ -41,6 +41,31 @@ export interface PairingPreview {
   expires_at: string;
 }
 
+export interface Billing {
+  /** Payments are required on this server. */
+  enabled: boolean;
+  /** This account has access (paid, or payments disabled). */
+  paid: boolean;
+  /** Price in paise (9900 = ₹99). */
+  amount: number;
+  currency: string;
+}
+
+export interface Order {
+  order_id: string;
+  key_id: string;
+  amount: number;
+  currency: string;
+  email: string;
+  name: string;
+}
+
+export interface CheckoutResult {
+  razorpay_order_id: string;
+  razorpay_payment_id: string;
+  razorpay_signature: string;
+}
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -77,6 +102,9 @@ export const api = {
   pairApprove: (code: string) => request<Device>("POST", "/v1/pair/approve", { code }),
   /** Browser sign-in: a one-time grant the page hands to the agent on 127.0.0.1. */
   pairGrant: (pairingId: string) => request<{ grant: string; name: string; os: string }>("POST", "/v1/pair/grant", { pairing_id: pairingId }),
+  billing: () => request<Billing>("GET", "/v1/billing"),
+  billingOrder: () => request<Order>("POST", "/v1/billing/order", {}),
+  billingVerify: (r: CheckoutResult) => request<{ paid: boolean }>("POST", "/v1/billing/verify", r),
   revokeDevice: (id: string) => request<void>("POST", `/v1/devices/${encodeURIComponent(id)}/revoke`, {}),
   audit: (before?: number) =>
     request<{ events: AuditEvent[] }>("GET", `/v1/audit?limit=100${before ? `&before=${before}` : ""}`).then((r) => r.events),

@@ -134,6 +134,7 @@ const (
 	ReasonBusy             = "busy"
 	ReasonTooManySessions  = "too_many_sessions"
 	ReasonRateLimited      = "rate_limited"
+	ReasonPaymentRequired  = "payment_required"
 	ReasonPeerDisconnected = "peer_disconnected"
 	ReasonResumeFailed     = "resume_failed"
 )

@@ -32,3 +32,10 @@ services:
         sync: false
       - key: CARSON_GOOGLE_CLIENT_SECRET
         sync: false
+      # One-time ₹99 purchase (Razorpay). Leave empty to run without payments.
+      - key: CARSON_RAZORPAY_KEY_ID
+        sync: false
+      - key: CARSON_RAZORPAY_KEY_SECRET
+        sync: false
+      - key: CARSON_RAZORPAY_WEBHOOK_SECRET
+        sync: false

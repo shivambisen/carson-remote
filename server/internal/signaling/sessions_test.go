@@ -490,3 +490,16 @@ func TestServerRejectionsAreAuditedWithoutLeakingOthersDevices(t *testing.T) {
 		t.Fatalf("bo's audit = %+v", events)
 	}
 }
+
+func TestUnpaidAccountsCannotConnect(t *testing.T) {
+	s := newSessionEnv(t)
+	s.handler.Access = func(context.Context, string) (bool, error) { return false, nil }
+	sendEnv(t, s.viewer, protocol.TypeSessionRequest, "", "r", protocol.SessionRequest{DeviceID: s.deviceID})
+	env := readType(t, s.viewer, protocol.TypeSessionReject)
+	var rej protocol.SessionReject
+	_ = json.Unmarshal(env.Body, &rej)
+	if rej.Reason != protocol.ReasonPaymentRequired {
+		t.Fatalf("reject = %+v", rej)
+	}
+	expectSilence(t, s.agent, 150*time.Millisecond) // the computer is never contacted
+}

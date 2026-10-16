@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -37,6 +38,11 @@ type Config struct {
 
 	Google OAuthClient
 	GitHub OAuthClient
+
+	// Razorpay: one-time purchase required when the key ID and secret are set.
+	RazorpayKeyID, RazorpayKeySecret, RazorpayWebhookSecret string
+	// PricePaise is the lifetime price in paise (9900 = ₹99).
+	PricePaise int64
 }
 
 // OAuthClient holds one identity provider's credentials. Empty ClientID disables it.
@@ -70,6 +76,11 @@ func Load(getenv func(string) string) (Config, error) {
 		WebDir:         get("CARSON_WEB_DIR", ""),
 		Google:         OAuthClient{getenv("CARSON_GOOGLE_CLIENT_ID"), getenv("CARSON_GOOGLE_CLIENT_SECRET")},
 		GitHub:         OAuthClient{getenv("CARSON_GITHUB_CLIENT_ID"), getenv("CARSON_GITHUB_CLIENT_SECRET")},
+
+		RazorpayKeyID:         getenv("CARSON_RAZORPAY_KEY_ID"),
+		RazorpayKeySecret:     getenv("CARSON_RAZORPAY_KEY_SECRET"),
+		RazorpayWebhookSecret: getenv("CARSON_RAZORPAY_WEBHOOK_SECRET"),
+		PricePaise:            9900,
 	}
 
 	parseBool := func(key string, dst *bool) {
@@ -98,6 +109,16 @@ func Load(getenv func(string) string) (Config, error) {
 	}
 	if cfg.DatabaseURL != "" && !strings.HasPrefix(cfg.DatabaseURL, "postgres://") && !strings.HasPrefix(cfg.DatabaseURL, "postgresql://") {
 		errs = append(errs, errors.New("CARSON_DATABASE_URL: must be a postgres:// or postgresql:// URL"))
+	}
+	if v := get("CARSON_PRICE_PAISE", ""); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || n < 100 {
+			errs = append(errs, fmt.Errorf("CARSON_PRICE_PAISE: want a whole number of paise, at least 100 (₹1), got %q", v))
+		}
+		cfg.PricePaise = n
+	}
+	if (cfg.RazorpayKeyID == "") != (cfg.RazorpayKeySecret == "") {
+		errs = append(errs, errors.New("CARSON_RAZORPAY_KEY_ID and CARSON_RAZORPAY_KEY_SECRET must be set together"))
 	}
 	parseBool("CARSON_DEV", &cfg.Dev)
 	parseBool("CARSON_TRUST_PROXY", &cfg.TrustProxy)

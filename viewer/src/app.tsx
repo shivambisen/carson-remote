@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 
-import { api, ApiError, type User } from "@/api";
+import { api, ApiError, type Billing, type User } from "@/api";
 import { Shell } from "@/components/shell";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -12,6 +12,7 @@ import { ConnectedPage, ConnectPage } from "@/pages/connect";
 import { DevicesPage } from "@/pages/devices";
 import { LoginPage } from "@/pages/login";
 import { PairPage } from "@/pages/pair";
+import { Paywall } from "@/pages/paywall";
 import { ViewPage } from "@/pages/view";
 
 export function App() {
@@ -26,15 +27,22 @@ export function App() {
 function Routes() {
   const route = useRoute();
   const [user, setUser] = useState<User | null>(null);
+  const [billing, setBilling] = useState<Billing | null>(null);
   const [error, setError] = useState<string | null>(null);
   const needsUser = route.page !== "login";
 
   useEffect(() => {
     if (!needsUser || user) return;
-    api.me().then(setUser, (err) => {
-      if (err instanceof ApiError && err.status === 401) toLogin();
-      else setError(errorMessage(err));
-    });
+    Promise.all([api.me(), api.billing()]).then(
+      ([u, b]) => {
+        setUser(u);
+        setBilling(b);
+      },
+      (err) => {
+        if (err instanceof ApiError && err.status === 401) toLogin();
+        else setError(errorMessage(err));
+      },
+    );
   }, [needsUser, user]);
 
   const signOut = () =>
@@ -48,12 +56,16 @@ function Routes() {
 
   if (route.page === "login") return <LoginPage params={route.params} />;
   if (error) return <p className="p-8 text-sm text-destructive">{error}</p>;
-  if (!user)
+  if (!user || !billing)
     return (
       <div className="grid h-svh place-items-center">
         <Loader2 className="size-6 animate-spin text-muted-foreground" />
       </div>
     );
+
+  // Everything but the activity log needs the one-time purchase (when payments are on).
+  if (billing.enabled && !billing.paid && route.page !== "activity" && route.page !== "connected")
+    return <Paywall billing={billing} user={user} onPaid={() => setBilling({ ...billing, paid: true })} onSignOut={signOut} />;
 
   switch (route.page) {
     case "view":
