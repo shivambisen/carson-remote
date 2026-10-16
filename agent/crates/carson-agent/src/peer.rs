@@ -76,8 +76,11 @@ pub struct SessionConfig {
     pub media: MediaOptions,
     /// Unattended-access PIN to verify before sharing anything.
     pub gate: Option<crate::control::PinGate>,
-    /// "Being controlled" banner text. `None` only when nothing real is shared (test pattern).
-    pub banner: Option<String>,
+    /// "x is controlling this computer", for the tray (and the pill). `None` only when nothing
+    /// real is shared (test pattern).
+    pub viewer_label: Option<String>,
+    /// Also show the on-screen pill.
+    pub show_indicator: bool,
     /// Device key: signs each offer's DTLS fingerprint so the viewer can verify, end to end,
     /// that media terminates at this device (not at a man in the middle, even the server).
     pub signer: Arc<crate::identity::DeviceKey>,
@@ -302,6 +305,7 @@ async fn session_inner(
     let mut capturer = Some(capturer);
     let mut streaming: Option<tokio::task::JoinHandle<()>> = None;
     let mut banner: Option<crate::ui::Banner> = None;
+    let mut _live: Option<crate::status::LiveSession> = None;
     let (mut connected, mut authorized) = (false, false);
     let deadline = tokio::time::sleep(CONNECT_TIMEOUT);
     tokio::pin!(deadline);
@@ -429,8 +433,12 @@ async fn session_inner(
                     continue;
                 }
                 if let Some(cap) = capturer.take() {
-                    // The banner goes up before the first frame leaves; no banner, no session.
-                    if let Some(text) = &cfg.banner {
+                    // The tray state (and pill, if on) go up before the first frame leaves;
+                    // if the pill was asked for and can't be shown, there is no session.
+                    if let Some(text) = &cfg.viewer_label {
+                        _live = Some(crate::status::LiveSession::start(text));
+                    }
+                    if let Some(text) = cfg.viewer_label.as_ref().filter(|_| cfg.show_indicator) {
                         match crate::ui::Banner::show(text) {
                             Ok(b) => banner = Some(b),
                             Err(e) => {
@@ -596,7 +604,8 @@ mod tests {
             ice_servers: vec![],
             media,
             gate: None,
-            banner: None,
+            viewer_label: None,
+            show_indicator: false,
             signer: Arc::new(crate::identity::DeviceKey::generate().unwrap()),
         };
         let session = tokio::spawn(run_session(cfg, capturer, out_tx, ev_tx.clone(), ev_rx));
@@ -849,7 +858,8 @@ mod tests {
             ice_servers: vec![],
             media,
             gate: Some(gate),
-            banner: None,
+            viewer_label: None,
+            show_indicator: false,
             signer: Arc::new(crate::identity::DeviceKey::generate().unwrap()),
         };
         let session = tokio::spawn(run_session(cfg, capturer, out_tx, ev_tx.clone(), ev_rx));
@@ -1015,7 +1025,8 @@ mod tests {
             ice_servers: vec![],
             media,
             gate: None,
-            banner: None,
+            viewer_label: None,
+            show_indicator: false,
             signer: Arc::new(crate::identity::DeviceKey::generate().unwrap()),
         };
         let session = tokio::spawn(run_session(cfg, capturer, out_tx, ev_tx.clone(), ev_rx));

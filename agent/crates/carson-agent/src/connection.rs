@@ -53,7 +53,7 @@ impl Agent {
         key: DeviceKey,
         device_id: String,
         media: MediaOptions,
-        policy: crate::consent::AccessPolicy,
+        settings: crate::sessions::SettingsSource,
     ) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         let key = Arc::new(key);
@@ -61,7 +61,7 @@ impl Agent {
             api,
             key: Arc::clone(&key),
             device_id,
-            sessions: std::sync::Mutex::new(Sessions::new(tx, media, policy, Arc::clone(&key))),
+            sessions: std::sync::Mutex::new(Sessions::new(tx, media, settings, Arc::clone(&key))),
             outbox: tokio::sync::Mutex::new(rx),
         }
     }

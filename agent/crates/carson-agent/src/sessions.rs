@@ -17,10 +17,59 @@ use crate::media::{InputMode, MediaOptions, Source, open_source};
 use crate::peer::{Outbox, SessionConfig, SessionEvent, run_session, send};
 use crate::ui::{self, Consent};
 
+/// The host's access settings for one session.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HostSettings {
+    pub policy: AccessPolicy,
+    /// Show the on-screen pill (the tray icon shows the session regardless).
+    pub show_indicator: bool,
+}
+
+/// Where each new session reads the settings from, so changes (tray menu, CLI) apply to the
+/// next connection without restarting the agent.
+#[derive(Debug, Clone)]
+pub enum SettingsSource {
+    #[cfg_attr(not(test), allow(dead_code))]
+    Fixed(HostSettings),
+    /// `agent.json` in `dir`. `synthetic`: test pattern without real input (no prompt).
+    File {
+        dir: std::path::PathBuf,
+        synthetic: bool,
+    },
+}
+
+impl SettingsSource {
+    pub fn current(&self) -> HostSettings {
+        match self {
+            Self::Fixed(s) => s.clone(),
+            Self::File { dir, synthetic } => match crate::config::load(dir) {
+                Ok(Some(cfg)) => HostSettings {
+                    policy: match cfg.access_policy() {
+                        AccessPolicy::Attended if *synthetic => AccessPolicy::Automatic,
+                        p => p,
+                    },
+                    show_indicator: cfg.show_indicator,
+                },
+                // Fail closed: if the settings can't be read, ask and show the pill.
+                other => {
+                    tracing::error!(
+                        ?other,
+                        "cannot read agent settings; asking before connecting"
+                    );
+                    HostSettings {
+                        policy: AccessPolicy::Attended,
+                        show_indicator: true,
+                    }
+                }
+            },
+        }
+    }
+}
+
 pub struct Sessions {
     out: Outbox,
     media: MediaOptions,
-    policy: AccessPolicy,
+    settings: SettingsSource,
     signer: Arc<DeviceKey>,
     /// Failed-PIN counter shared by all sessions (lockout survives reconnects).
     pins: Arc<Mutex<PinGuard>>,
@@ -35,14 +84,14 @@ impl Sessions {
     pub fn new(
         out: Outbox,
         media: MediaOptions,
-        policy: AccessPolicy,
+        settings: SettingsSource,
         signer: Arc<DeviceKey>,
     ) -> Self {
         Self {
             out,
             media,
             signer,
-            policy,
+            settings,
             pins: Arc::default(),
             pending_ice: HashMap::new(),
             resume_tokens: HashMap::new(),
@@ -172,7 +221,11 @@ impl Sessions {
             self.reject(&sid, "busy", "this computer is already in a session".into());
             return;
         }
-        let gate = match &self.policy {
+        let HostSettings {
+            policy,
+            show_indicator,
+        } = self.settings.current();
+        let gate = match &policy {
             AccessPolicy::Unattended {
                 pin_hash: Some(hash),
             } => {
@@ -203,7 +256,7 @@ impl Sessions {
 
         let (tx, rx) = mpsc::unbounded_channel();
         self.active.insert(sid.clone(), tx.clone());
-        let (out, media, policy) = (self.out.clone(), self.media.clone(), self.policy.clone());
+        let (out, media) = (self.out.clone(), self.media.clone());
         let signer = Arc::clone(&self.signer);
         tokio::spawn(async move {
             if policy == AccessPolicy::Attended {
@@ -272,17 +325,19 @@ impl Sessions {
                 &sid,
                 serde_json::json!({ "pin_required": gate.is_some() }),
             );
-            // The banner is skipped only for a synthetic stream with no real input.
+            // The tray always shows who is connected (except for a synthetic stream with no
+            // real input); the on-screen pill only when turned on.
             let synthetic =
                 media.source == Source::TestPattern && !matches!(media.input, InputMode::Native);
-            let banner = (!synthetic).then(|| banner_text(&viewer, controlling));
+            let viewer_label = (!synthetic).then(|| banner_text(&viewer, controlling));
             let cfg = SessionConfig {
                 signer,
                 sid,
                 ice_servers: ice,
                 media,
                 gate,
-                banner,
+                viewer_label,
+                show_indicator: show_indicator && !synthetic,
             };
             run_session(cfg, capturer, out, tx, rx).await;
         });
@@ -324,7 +379,7 @@ fn rejection_for(decision: &Consent) -> Option<(&'static str, String)> {
         Consent::Unavailable(e) => Some((
             "consent_unavailable",
             format!(
-                "could not ask at the computer ({e}); set up `carson-agent unattended on --pin` for unattended access"
+                "could not ask at the computer ({e}); turn off \"Ask before each connection\" there"
             ),
         )),
     }
@@ -346,7 +401,10 @@ mod tests {
         let mut sessions = Sessions::new(
             out,
             MediaOptions::default(),
-            AccessPolicy::Attended,
+            SettingsSource::Fixed(HostSettings {
+                policy: AccessPolicy::Attended,
+                show_indicator: false,
+            }),
             Arc::new(DeviceKey::generate().unwrap()),
         );
         sessions.handle(env(

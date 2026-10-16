@@ -12,22 +12,31 @@ pub struct AgentConfig {
     pub server_url: String,
     pub device_id: String,
     pub name: String,
-    /// Allow sessions without someone clicking "Allow" at this computer.
+    /// Require a PIN (set with `carson-agent unattended on --pin`) before a session starts.
     #[serde(default)]
     pub unattended: bool,
-    /// Argon2id hash of the unattended-access PIN, if one is set.
+    /// Argon2id hash of the access PIN, if one is set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pin_hash: Option<String>,
+    /// Ask "Allow?" at this computer before each connection. Off by default: only the account
+    /// that owns this device can connect at all.
+    #[serde(default)]
+    pub ask_before_connect: bool,
+    /// Show the small on-screen "being viewed" pill during a session. The tray icon always
+    /// shows when someone is connected.
+    #[serde(default)]
+    pub show_indicator: bool,
 }
 
 impl AgentConfig {
     pub fn access_policy(&self) -> crate::consent::AccessPolicy {
-        if self.unattended {
-            crate::consent::AccessPolicy::Unattended {
-                pin_hash: self.pin_hash.clone(),
-            }
-        } else {
-            crate::consent::AccessPolicy::Attended
+        use crate::consent::AccessPolicy;
+        match (&self.pin_hash, self.unattended) {
+            (Some(hash), true) => AccessPolicy::Unattended {
+                pin_hash: Some(hash.clone()),
+            },
+            _ if self.ask_before_connect => AccessPolicy::Attended,
+            _ => AccessPolicy::Unattended { pin_hash: None },
         }
     }
 }
@@ -122,6 +131,8 @@ mod tests {
             name: "Mac".into(),
             unattended: false,
             pin_hash: None,
+            ask_before_connect: false,
+            show_indicator: false,
         };
         save(&dir, &cfg).unwrap();
         assert_eq!(load(&dir).unwrap(), Some(cfg));
@@ -131,11 +142,34 @@ mod tests {
     }
 
     #[test]
-    fn configs_from_before_m6_default_to_attended() {
+    fn older_configs_connect_without_a_prompt_or_pill() {
         let old: AgentConfig =
             serde_json::from_str(r#"{"server_url":"https://c","device_id":"d","name":"n"}"#)
                 .unwrap();
-        assert_eq!(old.access_policy(), crate::consent::AccessPolicy::Attended);
+        assert_eq!(
+            old.access_policy(),
+            crate::consent::AccessPolicy::Unattended { pin_hash: None }
+        );
+        assert!(!old.show_indicator);
+    }
+
+    #[test]
+    fn policy_follows_settings() {
+        use crate::consent::AccessPolicy;
+        let mut c: AgentConfig =
+            serde_json::from_str(r#"{"server_url":"https://c","device_id":"d","name":"n"}"#)
+                .unwrap();
+        c.ask_before_connect = true;
+        assert_eq!(c.access_policy(), AccessPolicy::Attended);
+        c.unattended = true;
+        c.pin_hash = Some("h".into());
+        assert_eq!(
+            c.access_policy(),
+            AccessPolicy::Unattended {
+                pin_hash: Some("h".into())
+            },
+            "a PIN wins over the prompt"
+        );
     }
 
     #[test]

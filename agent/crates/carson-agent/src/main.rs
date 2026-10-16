@@ -16,6 +16,7 @@ mod media;
 mod peer;
 mod service;
 mod sessions;
+mod status;
 mod ui;
 
 use std::path::PathBuf;
@@ -44,8 +45,10 @@ COMMANDS:
     status                                Show pairing state
     unpair                                Forget this computer's identity (local only)
     service install | uninstall | status  Start carson automatically at login (or stop doing so)
-    unattended on [--pin] | off           Allow connections without approval at this computer
-                                          (optionally protected by a 6-10 digit PIN)
+    ask on | off                          Ask \"Allow?\" here before each connection (default off)
+    indicator on | off                    Show an on-screen pill while someone is connected
+                                          (default off; the tray icon always shows it)
+    unattended on --pin | off             Require a 6-10 digit PIN before each connection
 
 MEDIA OPTIONS:
     --fps <N>              Capture/encode frame rate (default 30)
@@ -91,6 +94,8 @@ enum Command {
         enable: bool,
         pin: bool,
     },
+    Ask(bool),
+    Indicator(bool),
     /// Hidden: host UI helper process (consent prompt / banner), spawned by `run`.
     Ui(Vec<String>),
     Help,
@@ -215,7 +220,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Cli> {
                 media.clipboard = false;
             }
             "pair" | "setup" | "service" | "run" | "capture-check" | "status" | "unpair"
-            | "unattended"
+            | "unattended" | "ask" | "indicator"
                 if command.is_none() =>
             {
                 command = Some(arg)
@@ -228,7 +233,10 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Cli> {
                     log_file,
                 });
             }
-            "on" | "off" if command.as_deref() == Some("unattended") && unattended.is_none() => {
+            "on" | "off"
+                if matches!(command.as_deref(), Some("unattended" | "ask" | "indicator"))
+                    && unattended.is_none() =>
+            {
                 unattended = Some(arg == "on");
             }
             "--pin" => pin = true,
@@ -278,6 +286,8 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Cli> {
             Command::Unattended { enable, pin }
         }
         Some(c) if pin => bail!("--pin only applies to unattended on, not {c}"),
+        Some("ask") => Command::Ask(unattended.context("ask needs on or off")?),
+        Some("indicator") => Command::Indicator(unattended.context("indicator needs on or off")?),
         Some("service") => {
             Command::Service(service_action.context("service needs install, uninstall or status")?)
         }
@@ -374,6 +384,8 @@ async fn pair(dir: PathBuf, server: &str, name: Option<String>, open_browser: bo
                         name,
                         unattended: false,
                         pin_hash: None,
+                        ask_before_connect: false,
+                        show_indicator: false,
                     },
                 )?;
                 println!("Paired as {device_id}. Start the agent with: carson-agent run");
@@ -402,24 +414,22 @@ async fn run(dir: PathBuf, media: media::MediaOptions) -> Result<()> {
     let (cfg, key) = load_paired(&dir)?;
     tracing::info!(server = %cfg.server_url, device_id = %cfg.device_id, version = VERSION, "starting");
     // A synthetic stream with no real input skips the prompt (nothing real is shared), but a
-    // configured unattended PIN is still enforced.
+    // configured PIN is still enforced.
     let synthetic = media.source == media::Source::TestPattern
         && !matches!(media.input, media::InputMode::Native);
-    let policy = match cfg.access_policy() {
-        consent::AccessPolicy::Attended if synthetic => consent::AccessPolicy::Automatic,
-        other => other,
+    let settings = sessions::SettingsSource::File {
+        dir: dir.clone(),
+        synthetic,
     };
-    match &policy {
+    match settings.current().policy {
         consent::AccessPolicy::Attended => {
-            tracing::info!("attended mode: each connection must be allowed at this computer")
+            tracing::info!("each connection must be allowed at this computer")
         }
         consent::AccessPolicy::Unattended { pin_hash: Some(_) } => {
-            tracing::info!("unattended mode with PIN")
+            tracing::info!("connections need the PIN")
         }
         consent::AccessPolicy::Unattended { pin_hash: None } => {
-            tracing::warn!(
-                "unattended mode WITHOUT a PIN: anyone signed in to your account can connect"
-            )
+            tracing::info!("your account connects without asking (`carson-agent ask on` to change)")
         }
         consent::AccessPolicy::Automatic => {
             tracing::info!("test pattern: no consent prompt or banner")
@@ -430,7 +440,7 @@ async fn run(dir: PathBuf, media: media::MediaOptions) -> Result<()> {
         key,
         cfg.device_id,
         media,
-        policy,
+        settings,
     );
     tokio::select! {
         res = agent.run() => res,
@@ -515,7 +525,7 @@ async fn setup(
         cfg.server_url
     );
     println!(
-        "Each connection asks for your approval here, unless you set `carson-agent unattended on --pin`."
+        "Your account can now connect from the website. To be asked first: `carson-agent ask on`."
     );
     Ok(())
 }
@@ -570,11 +580,15 @@ fn status(dir: PathBuf) -> Result<()> {
                 || "MISSING".to_owned(),
                 |seed| DeviceKey::from_seed(&seed).key_id(),
             );
-            let access = match (cfg.unattended, cfg.pin_hash.is_some()) {
-                (false, _) => "attended (each connection must be allowed here)",
-                (true, true) => "unattended, PIN required",
-                (true, false) => "unattended, no PIN",
+            let access = match cfg.access_policy() {
+                consent::AccessPolicy::Attended => "asks before each connection",
+                consent::AccessPolicy::Unattended { pin_hash: Some(_) } => "PIN required",
+                _ => "your account connects without asking",
             };
+            let access = format!(
+                "{access}; on-screen pill {}",
+                if cfg.show_indicator { "on" } else { "off" }
+            );
             println!(
                 "paired\n  server:    {}\n  device id: {}\n  name:      {}\n  key id:    {}  (the viewer shows the same value)\n  access:    {}",
                 cfg.server_url, cfg.device_id, cfg.name, key_id, access
@@ -584,7 +598,19 @@ fn status(dir: PathBuf) -> Result<()> {
     Ok(())
 }
 
-/// Turns unattended access on or off. Must be run at this computer: it is never remotely settable.
+/// Changes a local setting. Like every access setting, it is never remotely settable; a running
+/// agent applies it to the next connection.
+fn update_setting(
+    dir: &std::path::Path,
+    change: impl FnOnce(&mut config::AgentConfig),
+) -> Result<()> {
+    let mut cfg =
+        config::load(dir)?.context("not paired yet; run `carson-agent setup --server <URL>`")?;
+    change(&mut cfg);
+    config::save(dir, &cfg)
+}
+
+/// Turns PIN-protected access on or off. Must be run at this computer: it is never remotely settable.
 fn set_unattended(dir: PathBuf, enable: bool, with_pin: bool) -> Result<()> {
     let mut cfg =
         config::load(&dir)?.context("not paired yet; run `carson-agent pair --server <URL>`")?;
@@ -610,18 +636,13 @@ fn set_unattended(dir: PathBuf, enable: bool, with_pin: bool) -> Result<()> {
     config::save(&dir, &cfg)?;
     match (enable, cfg.pin_hash.is_some()) {
         (false, _) => {
-            println!("Unattended access is off: every connection must be allowed at this computer.")
+            println!("PIN access is off.")
         }
         (true, true) => println!(
-            "Unattended access is on. Viewers must enter the PIN. Restart `carson-agent run` to apply."
+            "PIN access is on: viewers must enter the PIN (applies to the next connection)."
         ),
         (true, false) => {
-            println!(
-                "Unattended access is on WITHOUT a PIN: anyone signed in to your account can connect."
-            );
-            println!(
-                "Consider `carson-agent unattended on --pin`. Restart `carson-agent run` to apply."
-            );
+            println!("No PIN set; use `carson-agent unattended on --pin` to require one.");
         }
     }
     Ok(())
@@ -713,6 +734,26 @@ async fn main() -> ExitCode {
         Command::Status => status(dir),
         Command::Unpair => unpair(dir),
         Command::Unattended { enable, pin } => set_unattended(dir, enable, pin),
+        Command::Ask(on) => update_setting(&dir, |c| c.ask_before_connect = on).map(|()| {
+            println!(
+                "{}",
+                if on {
+                    "Each connection now asks \"Allow?\" at this computer."
+                } else {
+                    "Connections from your account no longer ask at this computer."
+                }
+            )
+        }),
+        Command::Indicator(on) => update_setting(&dir, |c| c.show_indicator = on).map(|()| {
+            println!(
+                "{}",
+                if on {
+                    "An on-screen pill now shows while someone is connected."
+                } else {
+                    "No on-screen pill; the tray icon still shows when someone is connected."
+                }
+            )
+        }),
         Command::Ui(args) => ui::helper_main(&args),
     };
     match result {
