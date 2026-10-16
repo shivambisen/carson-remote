@@ -53,12 +53,14 @@ func newEnvWithHeartbeat(t *testing.T, interval, timeout time.Duration) *env {
 	h := &Handler{
 		Hub: hub, Store: st, Auth: a, Devices: d, Log: log, Now: time.Now,
 		PingInterval: interval, PingTimeout: timeout,
-		ResumeWindow:  300 * time.Millisecond,
-		ICE:           &turn.Issuer{Secret: "test-secret", TURNURLs: []string{"turn:turn.test:3478?transport=udp"}, STUNURLs: []string{"stun:turn.test:3478"}},
-		Audit:         &audit.Log{Store: st, Log: log, Now: time.Now},
-		ResumeLimiter: ratelimit.New(3, time.Minute, 3),
-		MessageRate:   50,
-		MessageBurst:  50,
+		// Test viewers only read when a test expects a message; keep their pings out of the way.
+		ViewerPingInterval: time.Hour,
+		ResumeWindow:       300 * time.Millisecond,
+		ICE:                &turn.Issuer{Secret: "test-secret", TURNURLs: []string{"turn:turn.test:3478?transport=udp"}, STUNURLs: []string{"stun:turn.test:3478"}},
+		Audit:              &audit.Log{Store: st, Log: log, Now: time.Now},
+		ResumeLimiter:      ratelimit.New(3, time.Minute, 3),
+		MessageRate:        50,
+		MessageBurst:       50,
 	}
 	mux.Handle("GET /v1/ws", h)
 	return &env{srv: srv, store: st, hub: hub, handler: h}
@@ -273,6 +275,7 @@ func TestMissedHeartbeatMarksOffline(t *testing.T) {
 // drop them, and a viewer that stops answering is cleaned up.
 func TestViewerIsPingedAndDeadViewerIsClosed(t *testing.T) {
 	e := newEnv(t)
+	e.handler.ViewerPingInterval = 50 * time.Millisecond
 	_, cookie := e.session(t, "ana@x.com")
 	live, _, err := e.dialViewer(t, cookie, e.srv.URL)
 	if err != nil {

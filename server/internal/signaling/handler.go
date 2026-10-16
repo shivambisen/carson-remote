@@ -40,6 +40,8 @@ type Handler struct {
 	// at most PingInterval + PingTimeout (15 s + 30 s = 45 s by default).
 	PingInterval time.Duration
 	PingTimeout  time.Duration
+	// ViewerPingInterval keeps idle viewer sockets alive through proxies (0: PingInterval).
+	ViewerPingInterval time.Duration
 	// ICE issues STUN/TURN servers (with time-limited TURN credentials) per session.
 	ICE *turn.Issuer
 	// ResumeWindow is how long a session waits for a dropped party (default 30 s).
@@ -124,7 +126,7 @@ func (h *Handler) serveViewer(w http.ResponseWriter, r *http.Request) {
 	go h.writeLoop(ctx, conn, c)
 	// Viewers get pings too: reverse proxies (Cloudflare, many load balancers) close WebSockets
 	// that are idle for ~100 s, which would drop the viewer between sessions.
-	go h.heartbeat(ctx, conn, c)
+	go h.heartbeat(ctx, conn, c, h.viewerPingInterval())
 	h.readLoop(ctx, conn, c, func(env protocol.Envelope) {
 		h.handleViewerSession(c, viewer, env)
 	})
@@ -166,7 +168,7 @@ func (h *Handler) serveAgent(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	go h.writeLoop(ctx, conn, c)
-	go h.heartbeat(ctx, conn, c)
+	go h.heartbeat(ctx, conn, c, h.PingInterval)
 	h.readLoop(ctx, conn, c, func(env protocol.Envelope) {
 		switch env.Type {
 		case protocol.TypeHello:
@@ -265,8 +267,8 @@ func (h *Handler) writeLoop(ctx context.Context, conn *websocket.Conn, c *client
 
 // heartbeat pings the client; a missed pong closes the connection (for an agent, that marks it
 // offline). For agents, successful pings refresh last_seen.
-func (h *Handler) heartbeat(ctx context.Context, conn *websocket.Conn, c *client) {
-	t := time.NewTicker(h.PingInterval)
+func (h *Handler) heartbeat(ctx context.Context, conn *websocket.Conn, c *client, every time.Duration) {
+	t := time.NewTicker(every)
 	defer t.Stop()
 	for {
 		select {
@@ -285,6 +287,13 @@ func (h *Handler) heartbeat(ctx context.Context, conn *websocket.Conn, c *client
 			}
 		}
 	}
+}
+
+func (h *Handler) viewerPingInterval() time.Duration {
+	if h.ViewerPingInterval > 0 {
+		return h.ViewerPingInterval
+	}
+	return h.PingInterval
 }
 
 func (h *Handler) touch(deviceID, version, os string) {
