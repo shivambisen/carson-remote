@@ -4,6 +4,7 @@
 package turn
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha1"
 	"encoding/base64"
@@ -25,6 +26,10 @@ type Issuer struct {
 	STUNURLs []string
 	TTL      time.Duration
 	Now      func() time.Time
+	// Cloudflare, if configured, provides the relay instead of (or besides) coturn.
+	Cloudflare *Cloudflare
+	// OnError reports relay credential failures (the session continues without a relay).
+	OnError func(error)
 }
 
 // Credentials returns username "<unix expiry>:<label>" and base64(HMAC-SHA1(secret, username)).
@@ -53,6 +58,22 @@ func (i *Issuer) ICEServers(label string) []protocol.ICEServer {
 		}
 		user, cred := Credentials(i.Secret, label, now().Add(ttl))
 		servers = append(servers, protocol.ICEServer{URLs: i.TURNURLs, Username: user, Credential: cred})
+	}
+	if i.Cloudflare.Enabled() {
+		ttl := i.TTL
+		if ttl <= 0 || ttl > 48*time.Hour {
+			ttl = DefaultTTL
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		cf, err := i.Cloudflare.ICEServers(ctx, ttl)
+		if err != nil {
+			if i.OnError != nil {
+				i.OnError(err)
+			}
+		} else {
+			servers = append(servers, cf...)
+		}
 	}
 	return servers
 }

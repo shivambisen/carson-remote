@@ -43,6 +43,9 @@ type Config struct {
 	RazorpayKeyID, RazorpayKeySecret, RazorpayWebhookSecret string
 	// PricePaise is the lifetime price in paise (9900 = ₹99).
 	PricePaise int64
+
+	// Cloudflare TURN (relay through strict firewalls): a TURN key ID and its API token.
+	CloudflareTURNKeyID, CloudflareTURNToken string
 }
 
 // OAuthClient holds one identity provider's credentials. Empty ClientID disables it.
@@ -81,6 +84,9 @@ func Load(getenv func(string) string) (Config, error) {
 		RazorpayKeySecret:     getenv("CARSON_RAZORPAY_KEY_SECRET"),
 		RazorpayWebhookSecret: getenv("CARSON_RAZORPAY_WEBHOOK_SECRET"),
 		PricePaise:            9900,
+
+		CloudflareTURNKeyID: getenv("CARSON_CLOUDFLARE_TURN_KEY_ID"),
+		CloudflareTURNToken: getenv("CARSON_CLOUDFLARE_TURN_TOKEN"),
 	}
 
 	parseBool := func(key string, dst *bool) {
