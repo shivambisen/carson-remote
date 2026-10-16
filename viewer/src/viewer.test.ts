@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Device } from "./api";
 import { loginUrl } from "./api";
 import { Backoff } from "./backoff";
-import { osLabel, timeAgo } from "./format";
+import { browserLabel, osLabel, timeAgo } from "./format";
 import { formatCode, isCompleteCode, normalizeCode } from "./pairing";
 import { applyMessage, type PresenceState } from "./signaling";
 
@@ -14,6 +14,7 @@ const dev = (id: string, online = false): Device => ({
   created_at: "2026-10-01T00:00:00Z",
   last_seen_at: "0001-01-01T00:00:00Z",
   online,
+  public_key: "AAAA",
 });
 
 describe("applyMessage", () => {
@@ -71,6 +72,12 @@ describe("format", () => {
     expect(timeAgo("2026-10-15T09:00:00Z", now)).toBe("3 h ago");
     expect(timeAgo("2026-10-13T12:00:00Z", now)).toBe("2 d ago");
     expect(timeAgo("garbage", now)).toBe("never");
+  });
+
+  it("summarizes browsers for the activity log", () => {
+    expect(browserLabel("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36")).toBe("Chrome on macOS");
+    expect(browserLabel("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/150.0 Safari/537.36 Edg/150.0")).toBe("Edge on Windows");
+    expect(browserLabel("Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0")).toBe("Firefox on Linux");
   });
 
   it("labels operating systems", () => {

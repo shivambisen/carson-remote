@@ -1,10 +1,11 @@
 import "./style.css";
 import { api, ApiError, loginUrl, type Device, type User } from "./api";
 import { h } from "./dom";
-import { osLabel, timeAgo } from "./format";
+import { browserLabel, osLabel, timeAgo } from "./format";
 import { formatCode, isCompleteCode } from "./pairing";
 import { FrameCoalescer, InputRouter, isViewerShortcut } from "./control";
 import { normalizePoint, wheelPixels } from "./input";
+import { browserPins, checkPin, keyId } from "./identity";
 import { describeReason, ViewerSession, type SessionOptions } from "./session";
 import { PresenceClient, type ConnectionStatus } from "./signaling";
 import { summarize, type StatsSample } from "./stats";
@@ -14,14 +15,14 @@ let presence: PresenceClient | null = null;
 let viewing: { session: ViewerSession; timer: ReturnType<typeof setInterval>; cleanup: () => void } | null = null;
 let user: User | null = null;
 
-type Route = { page: "login" | "devices" | "pair" | "view"; params: URLSearchParams; deviceId?: string };
+type Route = { page: "login" | "devices" | "pair" | "view" | "activity"; params: URLSearchParams; deviceId?: string };
 
 function parseRoute(): Route {
   const [path = "", query = ""] = location.hash.replace(/^#/, "").split("?");
   const params = new URLSearchParams(query);
   const view = /^\/view\/([A-Za-z0-9_]+)$/.exec(path);
   if (view) return { page: "view", params, deviceId: view[1] };
-  const page = path === "/login" ? "login" : path === "/pair" ? "pair" : "devices";
+  const page = path === "/login" ? "login" : path === "/pair" ? "pair" : path === "/activity" ? "activity" : "devices";
   return { page, params };
 }
 
@@ -38,6 +39,7 @@ function header(): HTMLElement {
       h(
         "div",
         { class: "who" },
+        h("a", { href: "#/activity" }, "Activity"),
         h("span", {}, user.email),
         h("button", { class: "link", onclick: () => void logout() }, "Sign out"),
       ),
@@ -110,8 +112,71 @@ function deviceRow(d: Device): HTMLElement {
         { class: "muted" },
         `${osLabel(d.os)} · ${d.online ? "Online" : `Last seen ${timeAgo(d.last_seen_at)}`}${d.agent_version ? ` · agent ${d.agent_version}` : ""}`,
       ),
+      d.public_key && h("div", { class: "muted keyid", title: "Compare with `carson-agent status` on that computer" }, `key ${keyId(d.public_key)}`),
     ),
     d.online && h("a", { class: "button small", href: `#/view/${encodeURIComponent(d.id)}` }, "View"),
+    h(
+      "button",
+      {
+        class: "secondary small",
+        title: "Remove this device from your account",
+        onclick: () => {
+          if (!confirm(`Remove "${d.name}" from your account?\n\nIt is disconnected immediately and can no longer be reached. To use it again, pair it again.`)) return;
+          api.revokeDevice(d.id).then(() => showDevices(), (err) => showError(err));
+        },
+      },
+      "Remove",
+    ),
+  );
+}
+
+const ACTIONS: Record<string, string> = {
+  signed_in: "Signed in",
+  device_paired: "Device paired",
+  device_revoked: "Device removed",
+  session_requested: "Connection requested",
+  session_accepted: "Connection accepted",
+  session_rejected: "Connection refused",
+  session_resumed: "Connection resumed",
+  session_ended: "Connection ended",
+};
+
+async function showActivity(gen: number): Promise<void> {
+  stopPresence();
+  const events = await api.audit();
+  if (isStale(gen)) return; // the user navigated elsewhere meanwhile
+  const rows = events.map((e) =>
+    h(
+      "tr",
+      {},
+      h("td", { title: e.at }, new Date(e.at).toLocaleString()),
+      h("td", {}, ACTIONS[e.action] ?? e.action),
+      h("td", {}, e.device_name ?? ""),
+      h("td", {}, e.ip ?? ""),
+      h("td", { title: e.user_agent ?? "" }, e.user_agent ? browserLabel(e.user_agent) : ""),
+      h("td", { class: "muted" }, e.detail ?? ""),
+    ),
+  );
+  render(
+    header(),
+    h(
+      "main",
+      { class: "card wide" },
+      h("h1", {}, "Activity"),
+      h("p", { class: "muted" }, "Sign-ins, device changes and every remote connection on your account, newest first. Kept for 90 days."),
+      events.length === 0
+        ? h("p", {}, "No activity yet.")
+        : h(
+            "div",
+            { class: "table-wrap" },
+            h(
+              "table",
+              { class: "audit" },
+              h("thead", {}, h("tr", {}, ...["When", "What", "Device", "From IP", "Browser", "Details"].map((t) => h("th", {}, t)))),
+              h("tbody", {}, ...rows),
+            ),
+          ),
+    ),
   );
 }
 
@@ -149,6 +214,32 @@ function showDevices(): void {
     () => (location.hash = "#/login?next=" + encodeURIComponent("/#/devices")),
   );
   presence.start();
+}
+
+/** Looks up the device's key and checks it against the pinned one before connecting. */
+async function openView(deviceId: string, forceRelay: boolean, gen: number): Promise<void> {
+  stopPresence();
+  const device = (await api.devices()).find((d) => d.id === deviceId);
+  if (isStale(gen)) return; // never start a session for a page the user already left
+  if (!device) {
+    render(header(), h("main", { class: "card narrow" }, h("h1", {}, "Device not found"), h("p", {}, "It may have been removed from your account."), h("a", { class: "button", href: "#/devices" }, "Back to devices")));
+    return;
+  }
+  if (checkPin(browserPins, device.id, device.public_key) === "mismatch") {
+    render(
+      header(),
+      h(
+        "main",
+        { class: "card narrow" },
+        h("h1", {}, "Security warning"),
+        h("p", { class: "error" }, `The identity key for "${device.name}" is different from the one this browser saw before.`),
+        h("p", {}, "This should never happen for the same device. Someone may be trying to impersonate it. Not connecting. If you re-paired that computer, it appears as a new device: use that one and remove this entry."),
+        h("a", { class: "button", href: "#/devices" }, "Back to devices"),
+      ),
+    );
+    return;
+  }
+  showView(deviceId, { forceRelay, publicKey: device.public_key });
 }
 
 function showView(deviceId: string, options: SessionOptions = {}): void {
@@ -479,13 +570,19 @@ async function logout(): Promise<void> {
   location.hash = "#/login";
 }
 
+/** Incremented on every navigation; async page loaders bail out if they become stale. */
+let routeGen = 0;
+const isStale = (gen: number) => gen !== routeGen;
+
 async function route(): Promise<void> {
+  const gen = ++routeGen;
   const r = parseRoute();
   if (r.page !== "view") stopViewing();
   if (r.page === "login") return showLogin(r.params);
   if (!user) {
     try {
       user = await api.me();
+      if (isStale(gen)) return;
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         location.hash = "#/login?next=" + encodeURIComponent("/" + (location.hash || "#/devices"));
@@ -495,7 +592,8 @@ async function route(): Promise<void> {
     }
   }
   if (r.page === "pair") showPair(r.params);
-  else if (r.page === "view" && r.deviceId) showView(r.deviceId, { forceRelay: r.params.get("relay") === "1" });
+  else if (r.page === "activity") await showActivity(gen);
+  else if (r.page === "view" && r.deviceId) await openView(r.deviceId, r.params.get("relay") === "1", gen);
   else showDevices();
 }
 

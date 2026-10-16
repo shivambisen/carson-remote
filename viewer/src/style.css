@@ -76,3 +76,10 @@ form.pin h2 { margin: 0; font-size: 18px; }
 form.pin input { font-size: 22px; letter-spacing: 6px; text-align: center; }
 .overlay.dim { background: rgba(0, 0, 0, 0.35); }
 .status.reconnecting { color: #e0a800; }
+main.card.wide { max-width: 1100px; }
+.keyid { font-family: ui-monospace, monospace; font-size: 12px; }
+.table-wrap { overflow-x: auto; }
+table.audit { border-collapse: collapse; width: 100%; font-size: 14px; }
+table.audit th, table.audit td { text-align: left; padding: 8px 10px; border-top: 1px solid var(--border); white-space: nowrap; }
+table.audit td:last-child { white-space: normal; }
+table.audit th { font-weight: 600; color: var(--muted); }

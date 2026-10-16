@@ -14,3 +14,10 @@ export function timeAgo(iso: string, now: Date = new Date()): string {
   if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
   return `${Math.floor(s / 86400)} d ago`;
 }
+
+/** "Mozilla/5.0 (Macintosh…) … Chrome/150.0 Safari/537.36" → "Chrome on macOS". */
+export function browserLabel(ua: string): string {
+  const browser = /Edg\//.test(ua) ? "Edge" : /Firefox\//.test(ua) ? "Firefox" : /Chrome\//.test(ua) ? "Chrome" : /Safari\//.test(ua) ? "Safari" : "";
+  const os = /Mac OS X|Macintosh/.test(ua) ? "macOS" : /Windows/.test(ua) ? "Windows" : /Android/.test(ua) ? "Android" : /iPhone|iPad/.test(ua) ? "iOS" : /Linux/.test(ua) ? "Linux" : "";
+  return [browser, os].filter(Boolean).join(" on ") || ua.slice(0, 40);
+}

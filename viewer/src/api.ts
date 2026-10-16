@@ -14,6 +14,20 @@ export interface Device {
   created_at: string;
   last_seen_at: string;
   online: boolean;
+  /** Ed25519 device key (base64url): verifies the agent's signed DTLS fingerprint. */
+  public_key: string;
+}
+
+export interface AuditEvent {
+  id: number;
+  at: string;
+  device_id?: string;
+  device_name?: string;
+  sid?: string;
+  action: string;
+  ip?: string;
+  user_agent?: string;
+  detail?: string;
 }
 
 export interface Providers {
@@ -61,6 +75,9 @@ export const api = {
   devices: () => request<{ devices: Device[] }>("GET", "/v1/devices").then((r) => r.devices),
   pairLookup: (code: string) => request<PairingPreview>("POST", "/v1/pair/lookup", { code }),
   pairApprove: (code: string) => request<Device>("POST", "/v1/pair/approve", { code }),
+  revokeDevice: (id: string) => request<void>("POST", `/v1/devices/${encodeURIComponent(id)}/revoke`, {}),
+  audit: (before?: number) =>
+    request<{ events: AuditEvent[] }>("GET", `/v1/audit?limit=100${before ? `&before=${before}` : ""}`).then((r) => r.events),
 };
 
 /** URL that starts an OAuth/OIDC login and returns to `returnTo` afterwards. */

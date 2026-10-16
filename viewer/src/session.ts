@@ -4,6 +4,7 @@
  */
 import { Backoff } from "./backoff";
 import { ClipboardAssembler, decodeClipboardChunk, encode, type InputMessage } from "./input";
+import { verifyOffer } from "./identity";
 import { PROTOCOL_VERSION, signalingUrl, type Envelope } from "./signaling";
 
 export interface DisplayDescriptor {
@@ -37,6 +38,8 @@ const MEDIA_LOSS_TIMEOUT_MS = 30_000;
 export interface SessionOptions {
   /** Only use TURN relay candidates (diagnostics: proves the relay path works). */
   forceRelay?: boolean;
+  /** The device's (pinned) public key. Every offer's DTLS fingerprint must be signed by it. */
+  publicKey?: string;
 }
 
 export type SessionState =
@@ -63,6 +66,8 @@ const REASONS: Record<string, string> = {
   connection_failed: "Could not connect to the other computer, even through the relay.",
   connection_lost: "The connection was lost and could not be recovered within 30 seconds.",
   resume_failed: "The session could not be resumed after the connection dropped.",
+  identity_mismatch: "Security check failed: the connection was not signed by that device's key. Nothing was shown. If this keeps happening, someone may be intercepting the connection.",
+  device_revoked: "This device was removed from your account.",
   connect_timeout: "The connection timed out.",
   agent_error: "The agent hit an error and ended the session.",
   user: "Session ended.",
@@ -215,8 +220,15 @@ export class ViewerSession {
         if (ours) this.onState({ kind: "connecting", detail: "Connecting…" });
         return;
       case "sdp.offer": {
-        if (!ours || !this.pc) return;
-        await this.pc.setRemoteDescription(env.body as RTCSessionDescriptionInit);
+        if (!ours || !this.pc || !this.sid) return;
+        const offer = env.body as RTCSessionDescriptionInit & { carson_sig?: unknown };
+        // End-to-end identity: refuse media from anything but the paired device.
+        if (!this.options.publicKey || !(await verifyOffer(this.options.publicKey, this.sid, offer.sdp ?? "", offer.carson_sig))) {
+          this.send("session.end", { reason: "identity_mismatch" });
+          this.end("identity_mismatch");
+          return;
+        }
+        await this.pc.setRemoteDescription({ type: offer.type, sdp: offer.sdp });
         for (const c of this.pendingCandidates.splice(0)) await this.pc.addIceCandidate(c);
         const answer = await this.pc.createAnswer();
         await this.pc.setLocalDescription(answer);
