@@ -3,6 +3,7 @@ package signaling
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -86,6 +87,9 @@ type sessionEnv struct {
 	*env
 	viewer, agent *peer
 	deviceID      string
+	agentToken    string // resume tokens from the last request()
+	viewerToken   string
+	agentDevToken string // device access token, to reconnect the agent
 }
 
 // newSessionEnv connects one agent and one viewer of the same user.
@@ -104,7 +108,7 @@ func newSessionEnv(t *testing.T) *sessionEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &sessionEnv{env: e, viewer: newPeer(viewer), agent: newPeer(agent), deviceID: devID}
+	return &sessionEnv{env: e, viewer: newPeer(viewer), agent: newPeer(agent), deviceID: devID, agentDevToken: tok}
 }
 
 func waitOnline(t *testing.T, h *Hub, id string) {
@@ -126,9 +130,17 @@ func (s *sessionEnv) request(t *testing.T) string {
 	if creds.ID != "req-1" || creds.SID == "" {
 		t.Fatalf("viewer turn.creds = %+v", creds)
 	}
-	if got := readType(t, s.agent, protocol.TypeTURNCreds); got.SID != creds.SID {
-		t.Fatalf("agent turn.creds sid = %q", got.SID)
+	agentCreds := readType(t, s.agent, protocol.TypeTURNCreds)
+	if agentCreds.SID != creds.SID {
+		t.Fatalf("agent turn.creds sid = %q", agentCreds.SID)
 	}
+	var vc, ac protocol.TURNCreds
+	_ = json.Unmarshal(creds.Body, &vc)
+	_ = json.Unmarshal(agentCreds.Body, &ac)
+	if vc.ResumeToken == "" || ac.ResumeToken == "" || vc.ResumeToken == ac.ResumeToken {
+		t.Fatalf("each party needs its own resume token: %q %q", vc.ResumeToken, ac.ResumeToken)
+	}
+	s.viewerToken, s.agentToken = vc.ResumeToken, ac.ResumeToken
 	req := readType(t, s.agent, protocol.TypeSessionRequest)
 	var body protocol.AgentSessionRequest
 	_ = json.Unmarshal(req.Body, &body)
@@ -255,17 +267,113 @@ func TestAgentRejectEndsSession(t *testing.T) {
 	}
 }
 
-func TestDisconnectEndsSessionForOtherParty(t *testing.T) {
+func TestSessionEndsWhenDroppedPartyDoesNotResume(t *testing.T) {
 	s := newSessionEnv(t)
 	sid := s.request(t)
+	start := time.Now()
 	s.agent.conn.Close(websocket.StatusNormalClosure, "bye")
+	expectSilence(t, s.viewer, 150*time.Millisecond) // still within the resume window
+	if s.hub.ActiveSessions() != 1 {
+		t.Fatal("session must survive a signaling drop for the resume window")
+	}
 	env := readType(t, s.viewer, protocol.TypeSessionEnd)
 	var end protocol.SessionEnd
 	_ = json.Unmarshal(env.Body, &end)
-	if env.SID != sid || end.Reason != protocol.ReasonPeerDisconnected {
-		t.Fatalf("session.end = %+v %+v", env, end)
+	if env.SID != sid || end.Reason != protocol.ReasonPeerDisconnected || time.Since(start) < 250*time.Millisecond {
+		t.Fatalf("session.end = %+v %+v after %s", env, end, time.Since(start))
 	}
 	if s.hub.ActiveSessions() != 0 {
 		t.Fatal("session not cleaned up")
+	}
+}
+
+func resumeOn(t *testing.T, p *peer, sid, token string) protocol.SessionResume {
+	t.Helper()
+	sendEnv(t, p, protocol.TypeSessionResume, sid, "r1", protocol.SessionResume{Token: token})
+	env := readType(t, p, protocol.TypeSessionResume)
+	var r protocol.SessionResume
+	_ = json.Unmarshal(env.Body, &r)
+	return r
+}
+
+func TestAgentResumesAfterSignalingDrop(t *testing.T) {
+	s := newSessionEnv(t)
+	sid := s.request(t)
+	sendEnv(t, s.agent, protocol.TypeSessionAccept, sid, "", map[string]any{})
+	readType(t, s.viewer, protocol.TypeSessionAccept)
+
+	s.agent.conn.Close(websocket.StatusNormalClosure, "network change")
+	agent2, _, err := s.dialAgent(t, s.agentDevToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a2 := newPeer(agent2)
+	if r := resumeOn(t, a2, sid, "wrong-token"); r.Resumed {
+		t.Fatal("resume with a wrong token must fail")
+	}
+	if r := resumeOn(t, a2, sid, s.agentToken); !r.Resumed {
+		t.Fatalf("resume failed: %+v", r)
+	}
+	// Relaying works again in both directions, and the session outlives the window.
+	sendEnv(t, s.viewer, protocol.TypeSessionICERestart, sid, "", map[string]any{})
+	readType(t, a2, protocol.TypeSessionICERestart)
+	sendEnv(t, a2, protocol.TypeSDPOffer, sid, "", map[string]string{"type": "offer", "sdp": "restart"})
+	readType(t, s.viewer, protocol.TypeSDPOffer)
+	time.Sleep(400 * time.Millisecond)
+	if s.hub.ActiveSessions() != 1 {
+		t.Fatal("resumed session was expired")
+	}
+	expectSilence(t, s.viewer, 50*time.Millisecond)
+}
+
+func TestViewerResumeRequiresSameAccountAndOwnToken(t *testing.T) {
+	s := newSessionEnv(t)
+	sid := s.request(t)
+	s.viewer.conn.Close(websocket.StatusNormalClosure, "tab reload")
+
+	_, boCookie := s.session(t, "bo@x.com")
+	boConn, _, _ := s.dialViewer(t, boCookie, s.srv.URL)
+	bo := newPeer(boConn)
+	if r := resumeOn(t, bo, sid, s.viewerToken); r.Resumed {
+		t.Fatal("another account must not resume with a stolen token")
+	}
+
+	_, anaCookie := s.session(t, "ana@x.com")
+	anaConn, _, _ := s.dialViewer(t, anaCookie, s.srv.URL)
+	ana := newPeer(anaConn)
+	if r := resumeOn(t, ana, sid, s.agentToken); r.Resumed {
+		t.Fatal("the agent's token must not resume the viewer side")
+	}
+	if r := resumeOn(t, ana, sid, s.viewerToken); !r.Resumed {
+		t.Fatal("same account with its own token must resume")
+	}
+	sendEnv(t, s.agent, protocol.TypeICECandidate, sid, "", map[string]string{"candidate": "c"})
+	readType(t, ana, protocol.TypeICECandidate)
+}
+
+func TestDeviceStaysBusyWhileItsSessionAwaitsResume(t *testing.T) {
+	s := newSessionEnv(t)
+	s.request(t)
+	s.agent.conn.Close(websocket.StatusNormalClosure, "drop")
+	agent2, _, _ := s.dialAgent(t, s.agentDevToken)
+	newPeer(agent2)
+	waitOnline(t, s.hub, s.deviceID)
+	sendEnv(t, s.viewer, protocol.TypeSessionRequest, "", "r2", protocol.SessionRequest{DeviceID: s.deviceID})
+	env := readType(t, s.viewer, protocol.TypeSessionReject)
+	var rej protocol.SessionReject
+	_ = json.Unmarshal(env.Body, &rej)
+	if rej.Reason != protocol.ReasonBusy {
+		t.Fatalf("reject = %+v", rej)
+	}
+}
+
+func TestTurnCredsCarryTimeLimitedTURN(t *testing.T) {
+	s := newSessionEnv(t)
+	sendEnv(t, s.viewer, protocol.TypeSessionRequest, "", "rq", protocol.SessionRequest{DeviceID: s.deviceID})
+	env := readType(t, s.viewer, protocol.TypeTURNCreds)
+	var c protocol.TURNCreds
+	_ = json.Unmarshal(env.Body, &c)
+	if len(c.ICEServers) != 2 || c.ICEServers[1].Username == "" || !strings.HasSuffix(c.ICEServers[1].Username, ":"+env.SID) {
+		t.Fatalf("ice servers = %+v", c.ICEServers)
 	}
 }

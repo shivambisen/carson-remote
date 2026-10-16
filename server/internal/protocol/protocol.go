@@ -100,9 +100,20 @@ type ICEServer struct {
 	Credential string   `json:"credential,omitempty"`
 }
 
-// TURNCreds carries the ICE servers for one session (STUN now; time-limited TURN in M5).
+// TURNCreds carries the ICE servers for one session and the recipient's resume token.
 type TURNCreds struct {
 	ICEServers []ICEServer `json:"ice_servers"`
+	// ResumeToken lets this party re-attach to the session after its signaling connection
+	// drops (session.resume). Each party gets its own token.
+	ResumeToken string `json:"resume_token,omitempty"`
+}
+
+// SessionResume is sent by a party to re-attach to a session; the server replies with
+// the same type and Resumed set.
+type SessionResume struct {
+	Token   string `json:"token,omitempty"`
+	Resumed bool   `json:"resumed"`
+	Reason  string `json:"reason,omitempty"`
 }
 
 // SessionReject explains why a session was refused.
@@ -124,6 +135,7 @@ const (
 	ReasonTooManySessions  = "too_many_sessions"
 	ReasonRateLimited      = "rate_limited"
 	ReasonPeerDisconnected = "peer_disconnected"
+	ReasonResumeFailed     = "resume_failed"
 )
 
 // Reply builds an envelope addressed to a session and/or answering a request ID.

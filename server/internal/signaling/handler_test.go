@@ -22,6 +22,7 @@ import (
 	"carson/server/internal/protocol"
 	"carson/server/internal/ratelimit"
 	"carson/server/internal/store"
+	"carson/server/internal/turn"
 )
 
 type env struct {
@@ -54,6 +55,8 @@ func newEnvWithHeartbeat(t *testing.T, interval, timeout time.Duration) *env {
 	mux.Handle("GET /v1/ws", &Handler{
 		Hub: hub, Store: st, Auth: a, Devices: d, Log: log, Now: time.Now,
 		PingInterval: interval, PingTimeout: timeout,
+		ResumeWindow: 300 * time.Millisecond,
+		ICE:          &turn.Issuer{Secret: "test-secret", TURNURLs: []string{"turn:turn.test:3478?transport=udp"}, STUNURLs: []string{"stun:turn.test:3478"}},
 	})
 	return &env{srv: srv, store: st, hub: hub}
 }

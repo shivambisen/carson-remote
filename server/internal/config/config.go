@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // Config is the full runtime configuration. Secrets only ever come from the environment.
@@ -19,6 +20,8 @@ type Config struct {
 	TURNSecret string
 	TURNURLs   []string
 	STUNURLs   []string
+	// TURNTTL bounds TURN credential lifetime (0 = turn.DefaultTTL).
+	TURNTTL time.Duration
 
 	// AllowedOrigins are browser origins (besides PublicURL) allowed to make
 	// cookie-authenticated requests, e.g. the Vite dev server.
@@ -72,6 +75,13 @@ func Load(getenv func(string) string) (Config, error) {
 		default:
 			errs = append(errs, fmt.Errorf("%s: invalid boolean %q", key, v))
 		}
+	}
+	if v := get("CARSON_TURN_TTL", ""); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d < time.Minute || d > 48*time.Hour {
+			errs = append(errs, fmt.Errorf("CARSON_TURN_TTL: want a duration between 1m and 48h, got %q", v))
+		}
+		cfg.TURNTTL = d
 	}
 	parseBool("CARSON_DEV", &cfg.Dev)
 	parseBool("CARSON_TRUST_PROXY", &cfg.TrustProxy)

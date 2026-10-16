@@ -16,6 +16,7 @@ import (
 	"carson/server/internal/protocol"
 	"carson/server/internal/ratelimit"
 	"carson/server/internal/store"
+	"carson/server/internal/turn"
 )
 
 // Close codes in the 4000-4999 private range.
@@ -37,8 +38,10 @@ type Handler struct {
 	// at most PingInterval + PingTimeout (15 s + 30 s = 45 s by default).
 	PingInterval time.Duration
 	PingTimeout  time.Duration
-	// STUNURLs are handed to both peers for each session.
-	STUNURLs []string
+	// ICE issues STUN/TURN servers (with time-limited TURN credentials) per session.
+	ICE *turn.Issuer
+	// ResumeWindow is how long a session waits for a dropped party (default 30 s).
+	ResumeWindow time.Duration
 	// SessionLimiter bounds session.request per user.
 	SessionLimiter *ratelimit.Limiter
 	TrustProxy     bool
@@ -102,7 +105,7 @@ func (h *Handler) serveViewer(w http.ResponseWriter, r *http.Request) {
 		ua = ua[:200]
 	}
 	viewer := protocol.ViewerInfo{Email: u.Email, IP: httpx.ClientIP(r, h.TrustProxy), UserAgent: ua}
-	defer h.endAllSessions(c)
+	defer h.detachAll(c)
 
 	go h.writeLoop(ctx, conn, c)
 	h.readLoop(ctx, conn, c, func(env protocol.Envelope) {
@@ -136,7 +139,7 @@ func (h *Handler) serveAgent(w http.ResponseWriter, r *http.Request) {
 	h.touch(d.ID, "", "")
 	h.announce(d.UserID, d.ID, true)
 	log.Info("agent online")
-	defer h.endAllSessions(c)
+	defer h.detachAll(c)
 	defer func() {
 		if h.Hub.removeAgent(c) {
 			h.touch(d.ID, "", "")

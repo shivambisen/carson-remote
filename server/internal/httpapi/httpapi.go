@@ -16,6 +16,7 @@ import (
 	"carson/server/internal/ratelimit"
 	"carson/server/internal/signaling"
 	"carson/server/internal/store"
+	"carson/server/internal/turn"
 )
 
 // Version is overridden at build time via -ldflags "-X carson/server/internal/httpapi.Version=...".
@@ -75,7 +76,8 @@ func New(cfg config.Config, st *store.Store, log *slog.Logger) *Server {
 	mux.Handle("GET /v1/ws", &signaling.Handler{
 		Hub: hub, Store: st, Auth: authSvc, Devices: devSvc, Log: log, Now: now,
 		PingInterval: 15 * time.Second, PingTimeout: 30 * time.Second,
-		STUNURLs: cfg.STUNURLs, TrustProxy: cfg.TrustProxy,
+		ICE:            &turn.Issuer{Secret: cfg.TURNSecret, TURNURLs: cfg.TURNURLs, STUNURLs: cfg.STUNURLs, TTL: cfg.TURNTTL},
+		TrustProxy:     cfg.TrustProxy,
 		SessionLimiter: ratelimit.New(10, time.Minute, 5),
 	})
 	if cfg.WebDir != "" {
