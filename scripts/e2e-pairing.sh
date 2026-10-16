@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # End-to-end check for milestone 2: carson-server (dev mode) + carson-agent.
-#   pair → approve in the "browser" (curl) → agent online → agent stops → offline.
+#   pair by browser sign-in (curl plays the browser: grant → agent's 127.0.0.1 hand-off)
+#   → agent online → agent stops → offline.
 # Usage: scripts/e2e-pairing.sh   (needs go, cargo, curl; runs on macOS and Linux)
 set -euo pipefail
 
@@ -49,19 +50,24 @@ echo "server up at $URL"
 export CARSON_AGENT_DIR="$WORK/agent" CARSON_AGENT_KEYSTORE=file
 "$AGENT" pair --server "$URL" --name "e2e host" >"$WORK/pair.out" 2>&1 &
 PAIR_PID=$!
-wait_for 15 grep -q '^code: ' "$WORK/pair.out" || fail "agent did not print a pairing code"
-CODE=$(sed -n 's/^code: //p' "$WORK/pair.out")
-echo "pairing code: $CODE"
+wait_for 15 grep -q '#/connect?' "$WORK/pair.out" || fail "agent did not print a sign-in link"
+LINK=$(grep -o "$URL/#/connect?[^ ]*" "$WORK/pair.out")
+param() { printf '%s' "$LINK" | sed -n "s/.*[?&]$1=\([^&]*\).*/\1/p"; }
+PAIRING=$(param pairing) LOOP_PORT=$(param port) STATE=$(param state)
+echo "sign-in link for $PAIRING (loopback port $LOOP_PORT)"
 
 api() { # api <path> <json>: POST as the signed-in browser user
   curl -fsS -b "$JAR" -c "$JAR" -H "Origin: $URL" -H 'Content-Type: application/json' -d "$2" "$URL$1"
 }
 api /auth/dev/login '{"email":"e2e@example.com"}' >/dev/null || fail "dev login"
-api /v1/pair/lookup "{\"code\":\"$CODE\"}" | grep -q '"name":"e2e host"' || fail "lookup did not show the device"
-api /v1/pair/approve "{\"code\":\"$CODE\"}" >/dev/null || fail "approve"
+# What the #/connect page does: get a one-time grant, hand it to the agent on 127.0.0.1.
+GRANT=$(api /v1/pair/grant "{\"pairing_id\":\"$PAIRING\"}" | sed -n 's/.*"grant":"\([^"]*\)".*/\1/p')
+[ -n "$GRANT" ] || fail "no grant"
+curl -fsS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$LOOP_PORT/done?state=$STATE&grant=$GRANT" | grep -q 302 ||
+  fail "agent did not accept the hand-off"
 wait $PAIR_PID || fail "agent pair exited non-zero"
-grep -q '^Paired as dev_' "$WORK/pair.out" || fail "agent did not confirm pairing"
-echo "paired"
+grep -q '^Added "e2e host" to your account (dev_' "$WORK/pair.out" || fail "agent did not confirm pairing"
+echo "paired (browser sign-in, no code)"
 
 devices() { curl -fsS -b "$JAR" "$URL/v1/devices"; }
 "$AGENT" run >"$WORK/agent.log" 2>&1 &

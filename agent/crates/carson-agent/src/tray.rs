@@ -213,13 +213,11 @@ impl Ui {
             .with_menu(Box::new(menu))
             .with_tooltip("carson");
         // macOS: a monochrome template icon matches the menu bar (light and dark).
-        let tray = if cfg!(target_os = "macos") {
-            tray.with_icon_templated(icon(Look::Offline))
-        } else {
-            tray.with_icon(icon(Look::Offline))
-        }
-        .build()
-        .context("create tray icon")?;
+        #[cfg(target_os = "macos")]
+        let tray = tray.with_icon_templated(icon(Look::Offline));
+        #[cfg(not(target_os = "macos"))]
+        let tray = tray.with_icon(icon(Look::Offline));
+        let tray = tray.build().context("create tray icon")?;
         Ok(Self {
             tray,
             status,
@@ -353,11 +351,14 @@ impl Ui {
         self.indicator.set_enabled(signed_in);
         if look != self.look {
             // macOS: monochrome template while idle (matches the menu bar); colour when live.
-            let _ = if cfg!(target_os = "macos") && look != Look::Live {
-                self.tray.set_icon_templated(Some(icon(look)))
-            } else {
+            #[cfg(target_os = "macos")]
+            let _ = if look == Look::Live {
                 self.tray.set_icon(Some(icon(look)))
+            } else {
+                self.tray.set_icon_templated(Some(icon(look)))
             };
+            #[cfg(not(target_os = "macos"))]
+            let _ = self.tray.set_icon(Some(icon(look)));
             self.look = look;
         }
     }
