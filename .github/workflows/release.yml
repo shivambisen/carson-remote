@@ -1,0 +1,95 @@
+name: release
+
+# Push a tag like v0.1.0 to build every platform and publish a GitHub Release.
+# Everything here runs on GitHub's free runners for public repositories.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write  # create the release
+  packages: write  # push the server image to ghcr.io
+
+jobs:
+  agent-macos:
+    strategy:
+      matrix:
+        include:
+          - { runner: macos-14, target: aarch64-apple-darwin }
+          - { runner: macos-13, target: x86_64-apple-darwin }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: "${{ matrix.target }}" }
+      - run: packaging/macos/build.sh ${{ matrix.target }}
+      - uses: actions/upload-artifact@v4
+        with: { name: "agent-${{ matrix.target }}", path: dist/* }
+
+  agent-windows:
+    runs-on: windows-latest
+    defaults: { run: { shell: bash } }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build (no source-compiled OpenH264)
+        working-directory: agent
+        run: cargo build --release -p carson-agent --no-default-features
+      - name: Package
+        run: |
+          VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' agent/Cargo.toml | head -1)
+          NAME=carson-agent-$VERSION-windows-x86_64
+          mkdir -p "dist/$NAME"
+          cp agent/target/release/carson-agent.exe packaging/windows/install.ps1 "dist/$NAME/"
+          cp packaging/README-agent.txt "dist/$NAME/README.txt"
+          (cd dist && 7z a "$NAME.zip" "$NAME" >/dev/null && sha256sum "$NAME.zip" > "$NAME.zip.sha256" && rm -rf "$NAME")
+      - uses: actions/upload-artifact@v4
+        with: { name: agent-windows, path: dist/* }
+
+  server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with: { go-version-file: server/go.mod }
+      - uses: actions/setup-node@v5
+        with: { node-version: 24 }
+      - name: Build server tarballs (viewer bundled)
+        env: { VERSION: "${{ github.ref_name }}" }
+        run: |
+          for t in linux/amd64 linux/arm64 darwin/arm64 darwin/amd64 windows/amd64; do
+            packaging/server/build.sh "${t%/*}" "${t#*/}"
+          done
+          (cd dist && sha256sum *.tar.gz > server-SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with: { name: server, path: dist/* }
+
+  server-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: server/Dockerfile
+          platforms: linux/amd64,linux/arm64  # arm64: Oracle Cloud's free Ampere VMs
+          push: true
+          build-args: VERSION=${{ github.ref_name }}
+          tags: ghcr.io/${{ github.repository_owner }}/carson-server:${{ github.ref_name }},ghcr.io/${{ github.repository_owner }}/carson-server:latest
+
+  publish:
+    needs: [agent-macos, agent-windows, server]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: dist, merge-multiple: true }
+      - name: Checksums (paste the macOS ones into the Homebrew formula)
+        run: cd dist && cat *.sha256 server-SHA256SUMS | tee SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

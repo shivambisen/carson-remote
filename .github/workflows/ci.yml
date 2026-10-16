@@ -48,6 +48,8 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --all
+      - name: Release configuration compiles (no source-compiled OpenH264)
+        run: cargo check --release -p carson-agent --no-default-features
 
   viewer:
     name: carson-viewer (TypeScript)
