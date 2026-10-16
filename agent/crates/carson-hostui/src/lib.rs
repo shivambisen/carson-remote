@@ -2,7 +2,8 @@
 //! Both block the calling (main) thread; carson-agent runs them in a helper process.
 //!
 //! - [`prompt`] returns `Ok(true)` only for an explicit Allow.
-//! - [`banner`] shows an always-on-top notice and returns when Disconnect is clicked.
+//! - [`banner`] shows a small always-on-top pill and returns when Disconnect is clicked
+//!   (optional: carson-agent shows it only when "Show on-screen indicator" is on).
 
 pub use native::{banner, prompt};
 
@@ -43,14 +44,15 @@ mod native {
     pub fn banner(text: &str) -> Result<()> {
         let mtm = MainThreadMarker::new().context("banner must run on the main thread")?;
         let app = app(mtm);
-        let (w, h) = (560.0, 44.0);
+        // A small pill in the top-right corner (drag it anywhere).
+        let (w, h) = (360.0, 30.0);
         let screen = NSScreen::mainScreen(mtm)
             .context("no screen")?
             .visibleFrame();
         let rect = NSRect::new(
             NSPoint::new(
-                screen.origin.x + (screen.size.width - w) / 2.0,
-                screen.origin.y + screen.size.height - h - 8.0,
+                screen.origin.x + screen.size.width - w - 12.0,
+                screen.origin.y + screen.size.height - h - 10.0,
             ),
             NSSize::new(w, h),
         );
@@ -71,14 +73,14 @@ mod native {
         );
         panel.setHidesOnDeactivate(false);
         panel.setMovableByWindowBackground(true);
-        panel.setBackgroundColor(Some(&NSColor::systemRedColor()));
+        panel.setBackgroundColor(Some(&NSColor::colorWithWhite_alpha(0.12, 0.92)));
 
-        let label = NSTextField::labelWithString(&NSString::from_str(text), mtm);
+        let label = NSTextField::labelWithString(&NSString::from_str(&format!("● {text}")), mtm);
         label.setTextColor(Some(&NSColor::whiteColor()));
-        label.setFont(Some(&NSFont::boldSystemFontOfSize(13.0)));
+        label.setFont(Some(&NSFont::systemFontOfSize(12.0)));
         label.setFrame(NSRect::new(
-            NSPoint::new(14.0, 13.0),
-            NSSize::new(w - 150.0, 18.0),
+            NSPoint::new(10.0, 7.0),
+            NSSize::new(w - 112.0, 16.0),
         ));
         // SAFETY: `terminate:` is a valid NSApplication action taking a sender.
         let button = unsafe {
@@ -90,8 +92,8 @@ mod native {
             )
         };
         button.setFrame(NSRect::new(
-            NSPoint::new(w - 128.0, 8.0),
-            NSSize::new(116.0, 28.0),
+            NSPoint::new(w - 98.0, 3.0),
+            NSSize::new(92.0, 24.0),
         ));
         let content = panel.contentView().context("panel has no content view")?;
         content.addSubview(&label);
@@ -164,15 +166,16 @@ mod native {
             if RegisterClassW(&wc) == 0 {
                 bail!("register banner window class");
             }
-            let (w, h) = (560, 44);
-            let x = (GetSystemMetrics(SM_CXSCREEN) - w) / 2;
+            // A small pill in the top-right corner.
+            let (w, h) = (360, 32);
+            let x = GetSystemMetrics(SM_CXSCREEN) - w - 16;
             let hwnd = CreateWindowExW(
                 WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
                 class,
                 w!("carson"),
                 WS_POPUP | WS_VISIBLE | WS_BORDER,
                 x,
-                8,
+                16,
                 w,
                 h,
                 None,
@@ -186,10 +189,10 @@ mod native {
                 w!("STATIC"),
                 PCWSTR(label.as_ptr()),
                 WS_CHILD | WS_VISIBLE,
-                12,
-                13,
-                w - 150,
-                20,
+                10,
+                8,
+                w - 110,
+                16,
                 Some(hwnd),
                 None,
                 Some(instance.into()),
@@ -200,10 +203,10 @@ mod native {
                 w!("BUTTON"),
                 w!("Disconnect"),
                 WS_CHILD | WS_VISIBLE | WINDOW_STYLE(BS_PUSHBUTTON as u32),
-                w - 128,
-                8,
-                116,
-                28,
+                w - 96,
+                4,
+                88,
+                24,
                 Some(hwnd),
                 Some(HMENU(DISCONNECT_ID as *mut _)),
                 Some(instance.into()),

@@ -1,64 +1,58 @@
 # carson user guide
 
-carson lets you see and control your own computers from a web browser. It is free: there is
-no account to buy and no subscription. You (or someone you trust) run a small server, and
-each computer you want to reach runs `carson-agent`.
+carson lets you see and control your own computers from a web browser. It is free: no
+subscription and no paid services. You (or someone you trust) run a small server; each computer
+you want to reach runs the carson app.
 
-## 1. Set up a computer to be reached ("host")
+## 1. Add a computer ("host")
 
-**Mac (Homebrew):**
+**Windows:** download `carson-setup-…-windows-x86_64.exe` and run it. No admin rights are needed.
+If SmartScreen warns (the app isn't signed yet): **More info → Run anyway**.
 
-```bash
-brew install shivambisen/carson-remote/carson-agent
-carson-agent setup --server https://YOUR-CARSON-SERVER
-```
+**Mac:** download `carson-…-macos-arm64.zip` (Apple Silicon) or `…-x86_64` (Intel), unzip, drag
+**carson** to Applications, then right-click it → **Open** once (it isn't notarized).
 
-**Mac (download):** unpack `carson-agent-…-macos-arm64.tar.gz` (Apple Silicon) or `…-x86_64`
-(Intel), right-click `carson-agent` → **Open** once (it is not notarized), then run the same
-`setup` command in Terminal.
+On first launch carson opens your browser: **sign in** (e.g. with Google) and the computer is
+added to your account, with no code to type. carson then lives in the menu bar / notification area
+and starts at login. On a Mac, allow **Screen & System Audio Recording** and **Accessibility** for
+carson when macOS asks (System Settings → Privacy & Security).
 
-**Windows:** unzip `carson-agent-…-windows-x86_64.zip`, then in that folder:
+The carson menu:
 
-```powershell
-powershell -ExecutionPolicy Bypass -File install.ps1 -Server https://YOUR-CARSON-SERVER
-```
+| Item | What it does |
+|---|---|
+| Status line | Online, connecting, or who is connected right now |
+| Sign in… | Add this computer to your account (opens the browser) |
+| Open carson website | Your device list |
+| Ask before each connection | Show Allow / Deny here for every connection (off by default) |
+| Show on-screen indicator | A small "being viewed" pill while connected (off by default) |
+| Start at login | Keep this computer reachable after a restart (on after signing in) |
+| Sign out of this computer | Forget this computer's identity here (remove it on the website too) |
+| Quit carson | Go offline until carson is started again |
 
-If SmartScreen warns (unsigned app): **More info → Run anyway**.
+**The tray / menu-bar icon always turns orange while someone is connected.** That can't be
+turned off: the person at the computer can always tell.
 
-`setup` does everything once:
-
-1. **Pairs** the computer with your account. A browser opens with a code filled in: sign in and click
-   **Add device**.
-2. **Permissions** (Mac): allow **Screen & System Audio Recording** and **Accessibility** for
-   carson-agent in System Settings → Privacy & Security, then run `setup` again if asked.
-3. **Codec**: on Macs carson uses the built-in hardware encoder. Elsewhere it downloads Cisco's
-   free OpenH264 library ("OpenH264 Video Codec provided by Cisco Systems, Inc.").
-4. **Starts automatically** at login, in the background.
+Computers without a browser (servers, scripts) can use the command-line tool instead:
+`carson-agent setup --server https://YOUR-CARSON-SERVER`, then enter the code it prints under
+**Add with a code** on the website.
 
 ## 2. Connect from another computer
 
-Open your carson server's address in Chrome, Edge, Firefox or Safari and sign in. Under **My
-devices**, click **View** next to a green (online) computer.
+Open your carson server's address in Chrome, Edge, Firefox or Safari and sign in with the same
+account. Under **Devices**, click **Connect** next to an online computer.
 
-- The person at that computer sees **Allow / Deny** (no answer in 30 s means deny), then a red banner
-  "*you* are controlling this computer" with a **Disconnect** button for the whole session.
-- Click the picture to control it. Untick **Control** for view-only.
+- Click the picture to control it. Turn **Control** off for view-only.
 - **Copy/paste text:** ⌘/Ctrl+V pastes your clipboard there. Text copied there lands in your clipboard.
 - **Fullscreen** captures system shortcuts too (hold Esc to leave).
 - With several monitors, pick one in the toolbar.
 - **Stats** (Ctrl+Alt+Shift+D) shows fps, bitrate, delay and whether the connection is direct or relayed.
 
-## 3. Unattended access (no one at the computer)
+## 3. Extra protection (optional)
 
-On the host itself (it can never be enabled remotely):
-
-```bash
-carson-agent unattended on --pin   # asks for a 6-10 digit PIN
-carson-agent unattended off
-```
-
-Viewers then type the PIN instead of someone clicking Allow. 5 wrong PINs lock it for 15
-minutes. The red banner still shows on the host.
+- **Ask before each connection** (carson menu): someone at the computer must click Allow.
+- **PIN:** on the host, `carson-agent unattended on --pin` asks viewers for a 6-10 digit PIN.
+  5 wrong PINs lock it for 15 minutes. Neither can be changed remotely.
 
 ## 4. Security, in plain words
 
@@ -75,9 +69,10 @@ minutes. The red banner still shows on the host.
 
 | Problem | Fix |
 |---|---|
-| Device shows offline | `carson-agent service status`; `carson-agent service install` to start it; log: `agent.log` in the carson config folder |
-| Black screen / "permission" message | Mac: allow Screen Recording for carson-agent, then `carson-agent service install` again (restarts it) |
-| Can view but not control | Mac: allow Accessibility for carson-agent |
+| Device shows offline | Is carson running (icon in the menu bar / tray)? Start it from Applications / the Start menu. Log: `agent.log` in the carson settings folder |
+| Black screen / "permission" message | Mac: allow Screen Recording for carson, then Quit and reopen carson |
+| Can view but not control | Mac: allow Accessibility for carson |
+| macOS asks for permissions again after an update | Expected for free (ad-hoc signed) builds: allow them again |
 | Permissions asked again after an update | Expected for free (non-notarized) builds: macOS ties permissions to the exact binary |
 | "Security check failed" | The connection was not signed by that computer's key. Do not proceed; re-pair the computer if you replaced it |
 | Removed a device by mistake | Run `carson-agent unpair` then `carson-agent setup --server …` on it |

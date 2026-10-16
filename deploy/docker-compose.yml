@@ -12,6 +12,8 @@ services:
       CARSON_ADDR: ":8080"
       CARSON_PUBLIC_URL: ${CARSON_PUBLIC_URL:-http://localhost:8080}
       CARSON_DB_PATH: /data/carson.db
+      # Optional PostgreSQL (e.g. Neon) instead of the SQLite file above.
+      CARSON_DATABASE_URL: ${CARSON_DATABASE_URL:-}
       CARSON_LOG_LEVEL: ${CARSON_LOG_LEVEL:-info}
       CARSON_DEV: ${CARSON_DEV:-true}
       CARSON_TURN_SECRET: ${CARSON_TURN_SECRET:?set CARSON_TURN_SECRET in .env}

@@ -3,14 +3,18 @@
 # Installs Docker, opens the firewall, generates secrets, and starts server + TURN + HTTPS.
 #
 #   sudo bash install-server.sh --domain carson.example.com \
-#        --github-id ID --github-secret SECRET            # and/or --google-id/--google-secret
+#        --google-id ID --google-secret SECRET            # and/or --github-id/--github-secret
+#        [--database-url ask]                              # PostgreSQL (e.g. Neon) instead of SQLite
+#
+# --database-url ask prompts for the URL without echoing it (keeps the password out of your
+# shell history); a literal URL works too.
 #
 # Free domain: create one at https://www.duckdns.org pointing at this VM's public IP.
 # Sign-in: create a free GitHub OAuth app (Settings > Developer settings > OAuth Apps) with
 #   callback URL https://<domain>/auth/github/callback
 set -euo pipefail
 
-DOMAIN="" GITHUB_ID="" GITHUB_SECRET="" GOOGLE_ID="" GOOGLE_SECRET=""
+DOMAIN="" GITHUB_ID="" GITHUB_SECRET="" GOOGLE_ID="" GOOGLE_SECRET="" DATABASE_URL=""
 REPO="${CARSON_REPO:-https://github.com/shivambisen/carson-remote.git}" DIR=/opt/carson
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -20,14 +24,19 @@ while [ $# -gt 0 ]; do
     --google-id) GOOGLE_ID=$2; shift 2 ;;
     --google-secret) GOOGLE_SECRET=$2; shift 2 ;;
     --repo) REPO=$2; shift 2 ;;
+    --database-url) DATABASE_URL=$2; shift 2 ;;
     *) echo "unknown option $1" >&2; exit 2 ;;
   esac
 done
 [ "$(id -u)" = 0 ] || { echo "run with sudo" >&2; exit 1; }
 [ -n "$DOMAIN" ] || { echo "--domain is required (a name pointing at this server)" >&2; exit 1; }
 if [ -z "$GITHUB_ID$GOOGLE_ID" ]; then
-  echo "Give --github-id/--github-secret or --google-id/--google-secret so people can sign in." >&2; exit 1
+  echo "Give --google-id/--google-secret or --github-id/--github-secret so people can sign in." >&2; exit 1
 fi
+if [ "$DATABASE_URL" = ask ]; then
+  read -rsp "PostgreSQL URL (postgresql://…): " DATABASE_URL; echo
+fi
+case "$DATABASE_URL" in ""|postgres://*|postgresql://*) ;; *) echo "--database-url must start with postgresql://" >&2; exit 1 ;; esac
 
 echo "==> Docker"
 if ! command -v docker >/dev/null; then
@@ -68,6 +77,7 @@ CARSON_GITHUB_CLIENT_ID=$GITHUB_ID
 CARSON_GITHUB_CLIENT_SECRET=$GITHUB_SECRET
 CARSON_GOOGLE_CLIENT_ID=$GOOGLE_ID
 CARSON_GOOGLE_CLIENT_SECRET=$GOOGLE_SECRET
+CARSON_DATABASE_URL=$DATABASE_URL
 ENV
   echo "    wrote $DIR/.env (secrets generated; keep it private)"
 else
@@ -78,4 +88,5 @@ echo "==> Start"
 docker compose -f deploy/docker-compose.yml --env-file .env --profile prod up -d --build
 echo
 echo "carson is starting at https://$DOMAIN (the HTTPS certificate is issued automatically)."
-echo "On each computer to share:  carson-agent setup --server https://$DOMAIN"
+echo "On each computer to share: install the carson app and sign in, or run"
+echo "    carson-agent setup --server https://$DOMAIN"
