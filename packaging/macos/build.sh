@@ -39,7 +39,11 @@ if [ -n "${MACOS_SIGN_P12_BASE64:-}" ]; then
   # codesign only uses trusted identities; trust this one for code signing (CI runner only).
   openssl pkcs12 -in "$STAGE/sign.p12" -nokeys -passin "pass:$MACOS_SIGN_P12_PASSWORD" -legacy 2>/dev/null > "$STAGE/sign.pem" ||
     openssl pkcs12 -in "$STAGE/sign.p12" -nokeys -passin "pass:$MACOS_SIGN_P12_PASSWORD" > "$STAGE/sign.pem"
-  sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain "$STAGE/sign.pem"
+  # A self-signed leaf (not a CA) needs "trustAsRoot"; "trustRoot" is only for CA certificates.
+  sudo security add-trusted-cert -d -r trustAsRoot -p codeSign -k /Library/Keychains/System.keychain "$STAGE/sign.pem"
+  # codesign looks identities up through the keychain search list.
+  security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+  security find-identity -v -p codesigning "$KC"
   rm -f "$STAGE/sign.p12"
   SIGN="glenley self-signed"
   SIGN_ARGS=(--keychain "$KC")
