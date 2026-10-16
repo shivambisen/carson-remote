@@ -8,7 +8,7 @@ use anyhow::{Context as _, Result, anyhow};
 use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, HMONITOR, MONITORINFO};
 use windows_capture::capture::{CaptureControl, Context, GraphicsCaptureApiHandler};
 use windows_capture::frame::Frame as WgcFrame;
-use windows_capture::graphics_capture_api::InternalCaptureControl;
+use windows_capture::graphics_capture_api::{GraphicsCaptureApi, InternalCaptureControl};
 use windows_capture::monitor::Monitor;
 use windows_capture::settings::{
     ColorFormat, CursorCaptureSettings, DirtyRegionSettings, DrawBorderSettings,
@@ -126,16 +126,43 @@ impl ScreenCapturer {
             .or_else(|_| Monitor::primary())
             .map_err(|e| anyhow!("find monitor: {e}"))?;
         let slot = Arc::new(FrameSlot::default());
+        // windows-capture refuses to start if any non-default setting is unavailable on this
+        // Windows build, so each optional one is used only where supported: cursor toggle
+        // (Windows 10 2004+), hiding the yellow border (Windows 11), minimum update interval
+        // (Windows 11 24H2). Without the last one the encoder's own fps cap still applies.
+        let supported = |check: fn() -> Result<
+            bool,
+            windows_capture::graphics_capture_api::Error,
+        >| { check().unwrap_or(false) };
+        let cursor = if !supported(GraphicsCaptureApi::is_cursor_settings_supported) {
+            CursorCaptureSettings::Default
+        } else if opts.show_cursor {
+            CursorCaptureSettings::WithCursor
+        } else {
+            CursorCaptureSettings::WithoutCursor
+        };
+        let border = if supported(GraphicsCaptureApi::is_border_settings_supported) {
+            DrawBorderSettings::WithoutBorder
+        } else {
+            DrawBorderSettings::Default
+        };
+        let interval = if supported(GraphicsCaptureApi::is_minimum_update_interval_supported) {
+            MinimumUpdateIntervalSettings::Custom(Duration::from_secs(1) / opts.fps.max(1))
+        } else {
+            MinimumUpdateIntervalSettings::Default
+        };
+        tracing::info!(
+            ?cursor,
+            ?border,
+            ?interval,
+            "Windows Graphics Capture settings"
+        );
         let settings = Settings::new(
             monitor,
-            if opts.show_cursor {
-                CursorCaptureSettings::WithCursor
-            } else {
-                CursorCaptureSettings::WithoutCursor
-            },
-            DrawBorderSettings::WithoutBorder,
+            cursor,
+            border,
             SecondaryWindowSettings::Default,
-            MinimumUpdateIntervalSettings::Custom(Duration::from_secs(1) / opts.fps.max(1)),
+            interval,
             DirtyRegionSettings::Default,
             ColorFormat::Bgra8,
             (Arc::clone(&slot), opts.max_width),

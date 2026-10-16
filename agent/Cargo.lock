@@ -411,6 +411,7 @@ dependencies = [
  "anyhow",
  "core-graphics",
  "screencapturekit",
+ "tracing",
  "windows",
  "windows-capture",
 ]
