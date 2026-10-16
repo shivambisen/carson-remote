@@ -4,13 +4,23 @@ import { Activity, LogOut } from "lucide-react";
 import type { User } from "@/api";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { MARK_PATH } from "@/lib/logo";
 import { cn } from "@/lib/utils";
+
+/** The glenley mark in the current text colour. */
+export function Mark({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 100 100" className={className} aria-hidden="true">
+      <path fill="currentColor" fillRule="evenodd" d={MARK_PATH} />
+    </svg>
+  );
+}
 
 export function Logo({ className }: { className?: string }) {
   return (
     <a href="#/devices" className={cn("flex items-center gap-2 font-semibold tracking-tight", className)}>
-      <img src="/icon.svg" alt="" className="size-7" />
-      carson
+      <Mark className="size-7" />
+      glenley
     </a>
   );
 }

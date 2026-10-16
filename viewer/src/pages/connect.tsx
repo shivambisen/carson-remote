@@ -16,7 +16,7 @@ export function loopbackUrl(params: URLSearchParams, grant: string): string | nu
 }
 
 /**
- * Opened by the carson app (`#/connect?pairing=…&port=…&state=…`) after the user signs in:
+ * Opened by the glenley app (`#/connect?pairing=…&port=…&state=…`) after the user signs in:
  * gets a one-time grant and hands it to the app on this same computer.
  */
 export function ConnectPage({ params }: { params: URLSearchParams }) {
@@ -29,7 +29,7 @@ export function ConnectPage({ params }: { params: URLSearchParams }) {
     started.current = true;
     const pairing = params.get("pairing") ?? "";
     if (!/^pair_[A-Za-z0-9]+$/.test(pairing) || !loopbackUrl(params, "x")) {
-      setError("This link is incomplete. Open carson on your computer and choose Sign in again.");
+      setError("This link is incomplete. Open glenley on your computer and choose Sign in again.");
       return;
     }
     api.pairGrant(pairing).then(
@@ -47,7 +47,7 @@ export function ConnectPage({ params }: { params: URLSearchParams }) {
         <CardHeader className="items-center text-center">
           {error ? <XCircle className="mx-auto size-10 text-destructive" /> : <Loader2 className="mx-auto size-10 animate-spin text-primary" />}
           <CardTitle className="font-serif text-3xl font-normal tracking-[-0.02em]">{error ? "Couldn't add this computer" : name ? `Adding ${name}…` : "Adding this computer…"}</CardTitle>
-          <CardDescription>{error ?? "Finishing sign-in in the carson app."}</CardDescription>
+          <CardDescription>{error ?? "Finishing sign-in in the glenley app."}</CardDescription>
         </CardHeader>
         {error && (
           <CardContent>

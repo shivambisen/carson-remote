@@ -171,7 +171,7 @@ impl Agent {
                             }
                             if code == Some(CLOSE_REPLACED) {
                                 return Ended::Fatal(anyhow::anyhow!(
-                                    "another carson-agent connected as this device; only one may run at a time"
+                                    "another glenley-agent connected as this device; only one may run at a time"
                                 ));
                             }
                             return Ended::Transient(anyhow::anyhow!("server closed connection: {frame:?}"));

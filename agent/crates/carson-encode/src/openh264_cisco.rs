@@ -34,7 +34,7 @@ pub fn install_dir() -> Option<PathBuf> {
     if let Some(d) = std::env::var_os("CARSON_OPENH264_DIR") {
         return Some(PathBuf::from(d));
     }
-    dirs::data_local_dir().map(|d| d.join("carson").join("openh264"))
+    dirs::data_local_dir().map(|d| d.join("glenley").join("openh264"))
 }
 
 /// Path to the installed library, if present.

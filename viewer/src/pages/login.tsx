@@ -68,7 +68,7 @@ export function LoginPage({ params }: { params: URLSearchParams }) {
     <Centered>
       <Card>
         <CardHeader className="text-center">
-          <CardTitle className="font-serif text-3xl font-normal tracking-[-0.02em]">Welcome to carson</CardTitle>
+          <CardTitle className="font-serif text-3xl font-normal tracking-[-0.02em]">Welcome to glenley</CardTitle>
           <CardDescription>Sign in to reach your computers from anywhere.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">

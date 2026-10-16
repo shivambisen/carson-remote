@@ -1,7 +1,7 @@
 //! Who may connect without someone at the computer, and how that is proven.
 //!
 //! - **Attended** (default): every session needs a click on "Allow" at the host.
-//! - **Unattended**: turned on locally (`carson-agent unattended on`), optionally with a PIN.
+//! - **Unattended**: turned on locally (`glenley-agent unattended on`), optionally with a PIN.
 //!   The PIN is checked here, on the host, after the WebRTC connection is up, so it only
 //!   ever travels end-to-end encrypted. The server never sees it. Only an Argon2id hash is stored.
 

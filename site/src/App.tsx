@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { ArrowRight, Check, Code2, Download, KeyRound, Laptop, Lock, MonitorSmartphone, MousePointer2, Radio, ShieldCheck, Zap } from "lucide-react";
 
+import { MARK_PATH } from "./logo";
 import { APP_URL, currentUAData, detectPlatform, DOWNLOADS, refinePlatform, SOURCE_URL, type Platform } from "./downloads";
 
 function usePlatform(): Platform {
@@ -9,6 +10,14 @@ function usePlatform(): Platform {
     void refinePlatform(platform, currentUAData()).then(setPlatform);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps -- once, on load
   return platform;
+}
+
+function Mark({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 100 100" className={className} aria-hidden="true">
+      <path fill="currentColor" fillRule="evenodd" d={MARK_PATH} />
+    </svg>
+  );
 }
 
 function AppleLogo({ className = "size-4" }: { className?: string }) {
@@ -64,7 +73,7 @@ function Nav({ platform }: { platform: Platform }) {
     <header className="sticky top-0 z-50 border-b border-transparent bg-paper/75 backdrop-blur-md">
       <div className="mx-auto flex h-16 max-w-6xl items-center gap-8 px-5">
         <a href="#" className="flex items-center gap-2 text-[17px] font-semibold tracking-tight">
-          <img src="/icon.svg" alt="" className="size-7" /> carson
+          <Mark className="size-7" /> glenley
         </a>
         <nav className="hidden items-center gap-7 text-[15px] text-ink/80 md:flex">
           <a href="#how" className="hover:text-ink">How it works</a>
@@ -74,7 +83,7 @@ function Nav({ platform }: { platform: Platform }) {
         </nav>
         <div className="flex-1" />
         {platform === "other" ? (
-          // Phones and tablets can't host carson, but they can connect.
+          // Phones and tablets can't host glenley, but they can connect.
           <a href={APP_URL} className={btn("accent", "sm")}>
             Connect <ArrowRight className="size-4" />
           </a>
@@ -161,7 +170,7 @@ function Hero({ platform }: { platform: Platform }) {
           <span>anywhere.</span>
         </h1>
         <p className="mx-auto mt-7 max-w-xl text-[17px] leading-relaxed text-muted sm:text-lg">
-          carson lets you see and control your own Mac or PC from any browser. Install it once, sign in, and it's always a click away. Free, open source, and encrypted end to end.
+          glenley lets you see and control your own Mac or PC from any browser. Install it once, sign in, and it's always a click away. Free, open source, and encrypted end to end.
         </p>
         <div className="mt-9 flex flex-col items-center justify-center gap-4 sm:flex-row">
           <DownloadButton platform={platform} />
@@ -218,7 +227,7 @@ function Steps({ steps }: { steps: { title: string; text: ReactNode }[] }) {
   );
 }
 
-/** What the carson tray menu looks like on the computer being shared. */
+/** What the glenley tray menu looks like on the computer being shared. */
 function TrayMock() {
   const row = (label: string, extra?: ReactNode, dim?: boolean) => (
     <div className={`flex items-center justify-between rounded-md px-3 py-1.5 ${dim ? "text-white/40" : "text-white/85"}`}>
@@ -233,14 +242,14 @@ function TrayMock() {
         <div className="ml-auto w-full max-w-[290px] rounded-xl bg-[#1f2128]/95 p-1.5 text-[13px] shadow-2xl ring-1 ring-white/10 backdrop-blur">
           {row("Studio PC · online", <span className="size-2 rounded-full bg-emerald-400" />)}
           <div className="my-1 h-px bg-white/10" />
-          {row("Open carson website")}
+          {row("Open glenley website")}
           <div className="my-1 h-px bg-white/10" />
           {row("Ask before each connection", undefined)}
           {row("Show on-screen indicator")}
           {row("Start at login", tick)}
           <div className="my-1 h-px bg-white/10" />
           {row("Sign out of this computer", undefined, true)}
-          {row("Quit carson")}
+          {row("Quit glenley")}
         </div>
       </div>
     </div>
@@ -307,7 +316,7 @@ function HowItWorks({ platform }: { platform: Platform }) {
             <br />
             <span className="text-faint">No codes, no setup.</span>
           </h2>
-          <p className="mt-6 text-[17px] leading-relaxed text-muted">Install carson on the computer you want to reach. Then open carson in any browser, on any other computer, and click Connect.</p>
+          <p className="mt-6 text-[17px] leading-relaxed text-muted">Install glenley on the computer you want to reach. Then open glenley in any browser, on any other computer, and click Connect.</p>
         </div>
         <div className="mt-10 flex justify-center">
           <div className="inline-flex gap-1 rounded-xl bg-line/60 p-1">
@@ -324,9 +333,9 @@ function HowItWorks({ platform }: { platform: Platform }) {
                 <div className="mt-8">
                   <Steps
                     steps={[
-                      { title: "Download and open carson", text: "A tiny app for Mac or Windows. No admin rights needed on Windows." },
+                      { title: "Download and open glenley", text: "A tiny app for Mac or Windows. No admin rights needed on Windows." },
                       { title: "Sign in with Google", text: "Your browser opens. Sign in and the computer is added to your account. There's no code to type." },
-                      { title: "That's it", text: "carson sits quietly in the menu bar or tray and starts with the computer. Its icon lights up whenever someone is connected." },
+                      { title: "That's it", text: "glenley sits quietly in the menu bar or tray and starts with the computer. Its icon lights up whenever someone is connected." },
                     ]}
                   />
                 </div>
@@ -352,7 +361,7 @@ function HowItWorks({ platform }: { platform: Platform }) {
                 </div>
                 <div className="mt-9">
                   <a href={APP_URL} className={btn("dark")}>
-                    Open carson <ArrowRight className="size-4" />
+                    Open glenley <ArrowRight className="size-4" />
                   </a>
                 </div>
               </div>
@@ -454,14 +463,14 @@ function Features() {
             <span className="text-faint">Really.</span>
           </>
         }
-        text="No subscription, no trial, no account limits. carson is open source under the Apache 2.0 license: read the code, run your own server, or help improve it."
+        text="No subscription, no trial, no account limits. glenley is open source under the Apache 2.0 license: read the code, run your own server, or help improve it."
         points={["Apache-2.0", "No ads", "No tracking", "Self-hostable"]}
         visual={
           <Panel>
-            <div className="text-white/40"># run your own carson server</div>
+            <div className="text-white/40"># run your own glenley server</div>
             <div>git clone {SOURCE_URL.replace("https://", "")}</div>
             <div>sudo bash deploy/install-server.sh \</div>
-            <div>&nbsp;&nbsp;--domain carson.example.com</div>
+            <div>&nbsp;&nbsp;--domain remote.example.com</div>
           </Panel>
         }
       />
@@ -495,7 +504,7 @@ function DownloadCard({ platform, current }: { platform: "mac-arm" | "windows"; 
       <p className="mt-5 text-[12px] leading-relaxed text-faint">
         {platform === "windows"
           ? "Windows may say it protected your PC, because the app isn't signed yet: choose More info → Run anyway."
-          : "Unzip and move carson to Applications. The first time, right-click it and choose Open. Allow Screen Recording and Accessibility when asked."}
+          : "Unzip and move glenley to Applications. The first time, right-click it and choose Open. Allow Screen Recording and Accessibility when asked."}
       </p>
     </div>
   );
@@ -506,7 +515,7 @@ function DownloadSection({ platform }: { platform: Platform }) {
     <section id="download" className="scroll-mt-20 border-t border-line/70 py-24 sm:py-32">
       <div className="mx-auto max-w-4xl px-5">
         <div className="text-center">
-          <h2 className="font-serif text-[clamp(2.4rem,5.5vw,4.2rem)] leading-[1.05] tracking-[-0.03em]">Get carson</h2>
+          <h2 className="font-serif text-[clamp(2.4rem,5.5vw,4.2rem)] leading-[1.05] tracking-[-0.03em]">Get glenley</h2>
           <p className="mx-auto mt-5 max-w-lg text-[17px] text-muted">Install it on each computer you want to reach. To connect, you only need a browser.</p>
         </div>
         <div className="mt-12 grid gap-5 sm:grid-cols-2">
@@ -526,10 +535,10 @@ function DownloadSection({ platform }: { platform: Platform }) {
 
 function Faq() {
   const qa: [string, string][] = [
-    ["Does the person at the computer know I'm connected?", "Yes. carson's icon in the menu bar or tray always changes while someone is connected. You can also turn on an on-screen indicator, or ask for approval before every connection."],
+    ["Does the person at the computer know I'm connected?", "Yes. glenley's icon in the menu bar or tray always changes while someone is connected. You can also turn on an on-screen indicator, or ask for approval before every connection."],
     ["Who can connect to my computer?", "Only the account it was added to. You can remove a computer from your account at any time, and every connection is listed under Activity."],
-    ["Is it really free?", "Yes. carson is open-source software. The video codec on Windows is Cisco's free OpenH264 (OpenH264 Video Codec provided by Cisco Systems, Inc.)."],
-    ["What if my network is strict?", "carson connects computers directly. Most home and mobile networks work. Some office networks block direct connections; a relay for those is on the way."],
+    ["Is it really free?", "Yes. glenley is open-source software. The video codec on Windows is Cisco's free OpenH264 (OpenH264 Video Codec provided by Cisco Systems, Inc.)."],
+    ["What if my network is strict?", "glenley connects computers directly. Most home and mobile networks work. Some office networks block direct connections; a relay for those is on the way."],
   ];
   return (
     <section className="border-t border-line/70 py-24">
@@ -556,7 +565,7 @@ function Footer() {
     <footer className="border-t border-line/70">
       <div className="mx-auto flex max-w-6xl flex-col gap-4 px-5 py-10 text-[13px] text-muted sm:flex-row sm:items-center">
         <span className="flex items-center gap-2 font-medium text-ink">
-          <img src="/icon.svg" alt="" className="size-5" /> carson
+          <Mark className="size-5" /> glenley
         </span>
         <span>Free and open source · Apache-2.0</span>
         <div className="flex-1" />

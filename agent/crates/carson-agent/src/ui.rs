@@ -1,6 +1,6 @@
 //! Host-side UI: the consent prompt and the always-on-top "being controlled" banner.
 //!
-//! Both run in a helper process (`carson-agent ui …`) spawned from `run`, so the GUI owns its
+//! Both run in a helper process (`glenley-agent ui …`) spawned from `run`, so the GUI owns its
 //! own main thread (AppKit requires it) and a hung or crashed UI cannot take the agent down.
 //! The agent fails closed: if the prompt cannot be shown the session is refused, and if the
 //! banner cannot be shown (or is dismissed with Disconnect) the session ends.
@@ -28,7 +28,7 @@ pub enum Consent {
 }
 
 fn helper(args: &[&str]) -> Result<Command> {
-    let exe = std::env::current_exe().context("locate carson-agent executable")?;
+    let exe = std::env::current_exe().context("locate glenley-agent executable")?;
     let mut cmd = Command::new(exe);
     cmd.arg("ui")
         .args(args)
@@ -108,6 +108,6 @@ pub fn helper_main(args: &[String]) -> Result<()> {
             });
             carson_hostui::banner(get("--text")?)
         }
-        _ => bail!("usage: carson-agent ui prompt --title T --message M | ui banner --text T"),
+        _ => bail!("usage: glenley-agent ui prompt --title T --message M | ui banner --text T"),
     }
 }

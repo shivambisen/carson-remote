@@ -12,7 +12,7 @@ pub struct AgentConfig {
     pub server_url: String,
     pub device_id: String,
     pub name: String,
-    /// Require a PIN (set with `carson-agent unattended on --pin`) before a session starts.
+    /// Require a PIN (set with `glenley-agent unattended on --pin`) before a session starts.
     #[serde(default)]
     pub unattended: bool,
     /// Argon2id hash of the access PIN, if one is set.
@@ -46,9 +46,18 @@ pub fn default_dir() -> Result<PathBuf> {
     if let Some(dir) = std::env::var_os("CARSON_AGENT_DIR") {
         return Ok(PathBuf::from(dir));
     }
-    dirs::config_dir()
-        .map(|d| d.join("carson"))
-        .context("no per-user config directory on this platform")
+    let base = dirs::config_dir().context("no per-user config directory on this platform")?;
+    let dir = base.join("glenley");
+    // The product used to be called carson: move its settings over once.
+    let legacy = base.join("carson");
+    if !dir.exists()
+        && legacy.join("agent.json").is_file()
+        && let Err(e) = std::fs::rename(&legacy, &dir)
+    {
+        tracing::warn!(error = %e, "could not move the old carson settings; using them in place");
+        return Ok(legacy);
+    }
+    Ok(dir)
 }
 
 pub fn config_path(dir: &Path) -> PathBuf {

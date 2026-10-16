@@ -125,7 +125,7 @@ pub fn h264_codec() -> RTCRtpCodecParameters {
     }
 }
 
-/// Builds a peer connection configured for carson (H.264 only, keyframe requests forwarded).
+/// Builds a peer connection configured for glenley (H.264 only, keyframe requests forwarded).
 pub async fn build_peer(
     ice_servers: Vec<RTCIceServer>,
     handler: Arc<dyn PeerConnectionEventHandler>,

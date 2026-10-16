@@ -45,7 +45,7 @@ export async function verifyOffer(publicKeyB64: string, sid: string, sdp: string
   }
 }
 
-/** Short identity for comparing by eye with `carson-agent status` (first 96 bits, grouped). */
+/** Short identity for comparing by eye with `glenley-agent status` (first 96 bits, grouped). */
 export function keyId(publicKeyB64: string): string {
   return publicKeyB64.slice(0, 16).match(/.{1,4}/g)?.join("-") ?? "";
 }

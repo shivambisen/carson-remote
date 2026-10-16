@@ -1,12 +1,12 @@
-//! Runs carson-agent automatically at login, in the user's session (screen capture and input
+//! Runs glenley-agent automatically at login, in the user's session (screen capture and input
 //! need the logged-in desktop, so this is a per-user agent, not a system daemon).
 //!
-//! - macOS: LaunchAgent `~/Library/LaunchAgents/com.carson.agent.plist`
-//! - Windows: Task Scheduler task "carson-agent" (at logon, normal privileges)
-//! - Linux: systemd user unit `~/.config/systemd/user/carson-agent.service`
+//! - macOS: LaunchAgent `~/Library/LaunchAgents/in.glenley.agent.plist`
+//! - Windows: Task Scheduler task "glenley-agent" (at logon, normal privileges)
+//! - Linux: systemd user unit `~/.config/systemd/user/glenley-agent.service`
 //!
-//! On macOS and Windows it starts the tray app (`carson app`) when that binary is installed,
-//! otherwise (and on Linux) `carson-agent run --service`. Errors that a restart cannot fix
+//! On macOS and Windows it starts the tray app (`glenley app`) when that binary is installed,
+//! otherwise (and on Linux) `glenley-agent run --service`. Errors that a restart cannot fix
 //! (device removed, another instance running) and Quit exit with status 0 so the service
 //! manager stops instead of restarting in a loop; crashes still restart it.
 
@@ -15,7 +15,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
-pub const LABEL: &str = "com.carson.agent";
+pub const LABEL: &str = "in.glenley.agent";
 
 /// Where the service writes its log.
 pub fn log_path(dir: &Path) -> PathBuf {
@@ -29,14 +29,14 @@ pub struct Launch {
     pub args: Vec<String>,
 }
 
-/// The tray app if it is installed (this binary, or `carson` next to `carson-agent`), else
+/// The tray app if it is installed (this binary, or `glenley` next to `glenley-agent`), else
 /// the headless agent.
 fn launch() -> Result<Launch> {
-    let exe = std::env::current_exe().context("locate carson-agent executable")?;
+    let exe = std::env::current_exe().context("locate glenley-agent executable")?;
     let app_name = if cfg!(windows) {
-        "carson.exe"
+        "glenley.exe"
     } else {
-        "carson"
+        "glenley"
     };
     let tray_supported = cfg!(any(target_os = "macos", target_os = "windows"));
     let is_app = exe.file_name().is_some_and(|n| n == app_name);
@@ -125,7 +125,7 @@ pub fn launch_agent_plist(launch: &Launch, config_dir: &Path) -> String {
 pub fn systemd_unit(launch: &Launch, config_dir: &Path) -> String {
     let q = |p: &Path| format!("\"{}\"", p.display().to_string().replace('"', "\\\""));
     format!(
-        "[Unit]\nDescription=carson remote desktop agent\nAfter=graphical-session.target\n\n[Service]\nExecStart={} --config-dir {} --log-file {} {}\nRestart=on-failure\nRestartSec=10\n\n[Install]\nWantedBy=default.target\n",
+        "[Unit]\nDescription=glenley remote desktop agent\nAfter=graphical-session.target\n\n[Service]\nExecStart={} --config-dir {} --log-file {} {}\nRestart=on-failure\nRestartSec=10\n\n[Install]\nWantedBy=default.target\n",
         q(&launch.exe),
         q(config_dir),
         q(&log_path(config_dir)),
@@ -139,7 +139,31 @@ pub fn is_installed() -> bool {
     status().starts_with("installed")
 }
 
+/// Login items left by versions released as "carson" (best effort; ignored if absent).
+fn remove_legacy() {
+    #[cfg(target_os = "macos")]
+    if let (Ok(uid), Some(home)) = (unsafe_free_uid(), dirs::home_dir()) {
+        let _ = Command::new("launchctl")
+            .args(["bootout", &format!("gui/{uid}/com.carson.agent")])
+            .output();
+        let _ = std::fs::remove_file(home.join("Library/LaunchAgents/com.carson.agent.plist"));
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = Command::new("schtasks")
+            .args(["/Delete", "/TN", "carson-agent", "/F"])
+            .output();
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let _ = Command::new("systemctl")
+            .args(["--user", "disable", "--now", "carson-agent"])
+            .output();
+    }
+}
+
 pub fn install(config_dir: &Path) -> Result<()> {
+    remove_legacy();
     let launch = launch()?;
     #[cfg(target_os = "macos")]
     {
@@ -172,7 +196,7 @@ pub fn install(config_dir: &Path) -> Result<()> {
         run(Command::new("schtasks").args([
             "/Create",
             "/TN",
-            "carson-agent",
+            "glenley-agent",
             "/SC",
             "ONLOGON",
             "/RL",
@@ -181,9 +205,9 @@ pub fn install(config_dir: &Path) -> Result<()> {
             "/TR",
             &tr,
         ]))?;
-        run(Command::new("schtasks").args(["/Run", "/TN", "carson-agent"]))?;
+        run(Command::new("schtasks").args(["/Run", "/TN", "glenley-agent"]))?;
         println!(
-            "Installed scheduled task \"carson-agent\" (starts at logon; log: {}).",
+            "Installed scheduled task \"glenley-agent\" (starts at logon; log: {}).",
             log_path(config_dir).display()
         );
     }
@@ -193,10 +217,10 @@ pub fn install(config_dir: &Path) -> Result<()> {
             .context("no config dir")?
             .join("systemd/user");
         std::fs::create_dir_all(&unit_dir)?;
-        let unit = unit_dir.join("carson-agent.service");
+        let unit = unit_dir.join("glenley-agent.service");
         std::fs::write(&unit, systemd_unit(&launch, config_dir))?;
         run(Command::new("systemctl").args(["--user", "daemon-reload"]))?;
-        run(Command::new("systemctl").args(["--user", "enable", "--now", "carson-agent"]))?;
+        run(Command::new("systemctl").args(["--user", "enable", "--now", "glenley-agent"]))?;
         println!(
             "Installed {} (log: {}).",
             unit.display(),
@@ -207,6 +231,7 @@ pub fn install(config_dir: &Path) -> Result<()> {
 }
 
 pub fn uninstall() -> Result<()> {
+    remove_legacy();
     #[cfg(target_os = "macos")]
     {
         let uid = unsafe_free_uid()?;
@@ -221,24 +246,24 @@ pub fn uninstall() -> Result<()> {
     #[cfg(target_os = "windows")]
     {
         let _ = Command::new("schtasks")
-            .args(["/End", "/TN", "carson-agent"])
+            .args(["/End", "/TN", "glenley-agent"])
             .output();
         let _ = Command::new("schtasks")
-            .args(["/Delete", "/TN", "carson-agent", "/F"])
+            .args(["/Delete", "/TN", "glenley-agent", "/F"])
             .output();
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
         let _ = Command::new("systemctl")
-            .args(["--user", "disable", "--now", "carson-agent"])
+            .args(["--user", "disable", "--now", "glenley-agent"])
             .output();
-        if let Some(unit) = dirs::config_dir().map(|d| d.join("systemd/user/carson-agent.service"))
+        if let Some(unit) = dirs::config_dir().map(|d| d.join("systemd/user/glenley-agent.service"))
         {
             let _ = std::fs::remove_file(unit);
         }
     }
     println!(
-        "The carson background service is removed (pairing is kept; `carson-agent unpair` forgets it)."
+        "The glenley background service is removed (pairing is kept; `glenley-agent unpair` forgets it)."
     );
     Ok(())
 }
@@ -268,7 +293,7 @@ pub fn status() -> String {
     #[cfg(target_os = "windows")]
     {
         match Command::new("schtasks")
-            .args(["/Query", "/TN", "carson-agent"])
+            .args(["/Query", "/TN", "glenley-agent"])
             .output()
         {
             Ok(o) if o.status.success() => {
@@ -284,7 +309,7 @@ pub fn status() -> String {
     #[cfg(all(unix, not(target_os = "macos")))]
     {
         match Command::new("systemctl")
-            .args(["--user", "is-active", "carson-agent"])
+            .args(["--user", "is-active", "glenley-agent"])
             .output()
         {
             Ok(o) if o.status.success() => "installed, running".into(),
@@ -326,12 +351,12 @@ mod tests {
     fn launch_agent_runs_service_mode_with_escaped_paths() {
         let p = launch_agent_plist(
             &Launch {
-                exe: "/Applications/Carson & Co/carson-agent".into(),
+                exe: "/Applications/Carson & Co/glenley-agent".into(),
                 args: vec!["run".into(), "--service".into()],
             },
             Path::new("/Users/a/Library/Application Support/carson"),
         );
-        assert!(p.contains("<string>/Applications/Carson &amp; Co/carson-agent</string>"));
+        assert!(p.contains("<string>/Applications/Carson &amp; Co/glenley-agent</string>"));
         assert!(p.contains("<string>run</string>\n    <string>--service</string>"));
         assert!(
             p.contains("<key>SuccessfulExit</key><false/>"),
@@ -347,16 +372,16 @@ mod tests {
     fn systemd_unit_quotes_paths() {
         let u = systemd_unit(
             &Launch {
-                exe: "/opt/my apps/carson-agent".into(),
+                exe: "/opt/my apps/glenley-agent".into(),
                 args: vec!["run".into(), "--service".into()],
             },
             Path::new("/home/a/.config/carson"),
         );
         assert!(u.contains(
-            "ExecStart=\"/opt/my apps/carson-agent\" --config-dir \"/home/a/.config/carson\""
+            "ExecStart=\"/opt/my apps/glenley-agent\" --config-dir \"/home/a/.config/carson\""
         ));
         assert!(u.contains("Restart=on-failure"));
-        assert!(u.contains("carson.log run --service") || u.contains("agent.log\" run --service"));
+        assert!(u.contains("glenley.log run --service") || u.contains("agent.log\" run --service"));
     }
 
     #[test]

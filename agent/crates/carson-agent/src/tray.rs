@@ -1,4 +1,4 @@
-//! The tray app (`carson`): a menu-bar / notification-area icon that keeps this computer
+//! The tray app (`glenley`): a menu-bar / notification-area icon that keeps this computer
 //! online and holds its settings, so nobody needs the command line.
 //!
 //! The tray owns the main thread (AppKit requires it, and Windows delivers tray messages to the
@@ -49,7 +49,7 @@ pub fn run(dir: PathBuf, server: Option<String>) -> Result<()> {
     let agent_dir = dir.clone();
     let agent_server = server.clone();
     let agent = std::thread::Builder::new()
-        .name("carson-agent".into())
+        .name("glenley-agent".into())
         .spawn(move || {
             let rt = tokio::runtime::Runtime::new().expect("start runtime");
             rt.block_on(controller(agent_dir, agent_server, cmd_rx, note_tx.clone()));
@@ -117,7 +117,7 @@ async fn controller(
                 let Some(server) = server.clone().or_else(|| DEFAULT_SERVER.map(str::to_owned))
                 else {
                     let _ = notes.send(Note::Problem(Some(
-                        "No server configured: run `carson-agent setup --server <URL>`".into(),
+                        "No server configured: run `glenley-agent setup --server <URL>`".into(),
                     )));
                     continue;
                 };
@@ -179,7 +179,7 @@ impl Ui {
         let cfg = config::load(dir).ok().flatten();
         let status = MenuItem::new("Starting…", false, None);
         let sign_in = MenuItem::new("Sign in…", true, None);
-        let website = MenuItem::new("Open carson website", true, None);
+        let website = MenuItem::new("Open glenley website", true, None);
         let ask = CheckMenuItem::new(
             "Ask before each connection",
             cfg.is_some(),
@@ -194,7 +194,7 @@ impl Ui {
         );
         let login = CheckMenuItem::new("Start at login", true, service::is_installed(), None);
         let sign_out = MenuItem::new("Sign out of this computer", cfg.is_some(), None);
-        let quit = MenuItem::new("Quit carson", true, None);
+        let quit = MenuItem::new("Quit glenley", true, None);
         let menu = Menu::new();
         menu.append_items(&[
             &status,
@@ -211,7 +211,7 @@ impl Ui {
         ])?;
         let tray = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
-            .with_tooltip("carson");
+            .with_tooltip("glenley");
         // macOS: a monochrome template icon matches the menu bar (light and dark).
         #[cfg(target_os = "macos")]
         let tray = tray.with_icon_templated(icon(Look::Offline));
@@ -341,7 +341,7 @@ impl Ui {
         };
         if status != self.last_status {
             self.status.set_text(&status);
-            let _ = self.tray.set_tooltip(Some(format!("carson: {status}")));
+            let _ = self.tray.set_tooltip(Some(format!("glenley: {status}")));
             self.last_status = status;
         }
         let signed_in = self.paired.is_some();
@@ -364,48 +364,22 @@ impl Ui {
     }
 }
 
-/// A 32×32 monitor glyph. Live: orange screen; online: teal; offline: grey (Windows) or the
-/// template outline (macOS).
+/// The glenley mark at 32×32 (alpha mask), tinted per state. Live: orange; online: teal;
+/// offline: grey (Windows) or the template outline (macOS).
 fn icon(look: Look) -> Icon {
     const N: usize = 32;
-    let (frame, fill): ([u8; 4], Option<[u8; 4]>) = match look {
-        Look::Live => ([0xF9, 0x73, 0x16, 0xFF], Some([0xF9, 0x73, 0x16, 0xFF])),
-        Look::Online if cfg!(target_os = "macos") => ([0, 0, 0, 0xFF], None),
-        Look::Online => ([0x14, 0xB8, 0xA6, 0xFF], None),
-        Look::Offline if cfg!(target_os = "macos") => ([0, 0, 0, 0x80], None),
-        Look::Offline => ([0x9C, 0xA3, 0xAF, 0xFF], None),
+    const MASK: &[u8; N * N] = include_bytes!("../assets/tray-mask-32.alpha");
+    let ([r, g, b], opacity): ([u8; 3], u16) = match look {
+        Look::Live => ([0xF9, 0x73, 0x16], 255),
+        Look::Online if cfg!(target_os = "macos") => ([0, 0, 0], 255),
+        Look::Online => ([0x14, 0xB8, 0xA6], 255),
+        Look::Offline if cfg!(target_os = "macos") => ([0, 0, 0], 128),
+        Look::Offline => ([0x9C, 0xA3, 0xAF], 255),
     };
-    let mut px = vec![0u8; N * N * 4];
-    let mut put = |x: usize, y: usize, c: [u8; 4]| {
-        let i = (y * N + x) * 4;
-        px[i..i + 4].copy_from_slice(&c);
-    };
-    // Screen: rounded rectangle outline (3 px), x 2..30, y 4..22.
-    for y in 4..23 {
-        for x in 2..30 {
-            let corner = !(4..=27).contains(&x) && !(6..=20).contains(&y);
-            if corner && ((x == 2 || x == 29) && (y == 4 || y == 22)) {
-                continue;
-            }
-            let edge = !(5..27).contains(&x) || !(7..20).contains(&y);
-            if edge {
-                put(x, y, frame);
-            } else if let Some(f) = fill {
-                put(x, y, f);
-            }
-        }
-    }
-    // Stand and base.
-    for y in 23..26 {
-        for x in 13..19 {
-            put(x, y, frame);
-        }
-    }
-    for y in 26..29 {
-        for x in 8..24 {
-            put(x, y, frame);
-        }
-    }
+    let px = MASK
+        .iter()
+        .flat_map(|&a| [r, g, b, (u16::from(a) * opacity / 255) as u8])
+        .collect();
     Icon::from_rgba(px, N as u32, N as u32).expect("valid icon")
 }
 

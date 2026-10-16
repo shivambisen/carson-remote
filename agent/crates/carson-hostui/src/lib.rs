@@ -1,9 +1,9 @@
-//! Native host UI for carson-agent: the consent prompt and the "being controlled" banner.
-//! Both block the calling (main) thread; carson-agent runs them in a helper process.
+//! Native host UI for glenley-agent: the consent prompt and the "being controlled" banner.
+//! Both block the calling (main) thread; glenley-agent runs them in a helper process.
 //!
 //! - [`prompt`] returns `Ok(true)` only for an explicit Allow.
 //! - [`banner`] shows a small always-on-top pill and returns when Disconnect is clicked
-//!   (optional: carson-agent shows it only when "Show on-screen indicator" is on).
+//!   (optional: glenley-agent shows it only when "Show on-screen indicator" is on).
 
 pub use native::{banner, prompt};
 
@@ -172,7 +172,7 @@ mod native {
             let hwnd = CreateWindowExW(
                 WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
                 class,
-                w!("carson"),
+                w!("glenley"),
                 WS_POPUP | WS_VISIBLE | WS_BORDER,
                 x,
                 16,
@@ -227,7 +227,7 @@ mod native {
     use anyhow::{Result, bail};
 
     pub fn prompt(_title: &str, _message: &str) -> Result<bool> {
-        bail!("no consent prompt on this OS yet; use `carson-agent unattended on --pin`")
+        bail!("no consent prompt on this OS yet; use `glenley-agent unattended on --pin`")
     }
 
     pub fn banner(_text: &str) -> Result<()> {

@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 
-/** Fallback for computers without a browser: approve the code `carson-agent pair` shows. */
+/** Fallback for computers without a browser: approve the code `glenley-agent pair` shows. */
 export function PairPage({ params }: { params: URLSearchParams }) {
   const [code, setCode] = useState(formatCode(params.get("code") ?? ""));
   const [preview, setPreview] = useState<PairingPreview | null>(null);
@@ -37,7 +37,7 @@ export function PairPage({ params }: { params: URLSearchParams }) {
       <Card>
         <CardHeader>
           <CardTitle>Add with a code</CardTitle>
-          <CardDescription>For computers without a browser: enter the code that carson shows there.</CardDescription>
+          <CardDescription>For computers without a browser: enter the code that glenley shows there.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
           {error && (

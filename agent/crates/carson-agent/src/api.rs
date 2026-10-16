@@ -25,7 +25,7 @@ impl std::fmt::Display for ApiError {
         match self {
             ApiError::DeviceRejected => write!(
                 f,
-                "the server no longer accepts this device; run `carson-agent unpair` then `pair` again"
+                "the server no longer accepts this device; run `glenley-agent unpair` then `pair` again"
             ),
             ApiError::Status {
                 status,
@@ -73,7 +73,7 @@ impl Api {
     pub fn new(server_url: &str) -> Result<Self> {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(15))
-            .user_agent(concat!("carson-agent/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!("glenley-agent/", env!("CARGO_PKG_VERSION")))
             .build()?;
         Ok(Self {
             http,

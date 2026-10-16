@@ -58,7 +58,7 @@ interface IceServer {
 }
 
 const REASONS: Record<string, string> = {
-  permission_denied: "carson-agent on that computer is missing Screen Recording permission. Grant it in System Settings → Privacy & Security → Screen Recording, then restart the agent.",
+  permission_denied: "glenley on that computer is missing Screen Recording permission. Grant it in System Settings → Privacy & Security → Screen Recording, then restart the agent.",
   capture_failed: "The other computer could not capture its screen.",
   device_offline: "That device is offline.",
   unknown_device: "That device is not on your account.",
@@ -75,7 +75,7 @@ const REASONS: Record<string, string> = {
   user: "Session ended.",
   declined: "The person at that computer declined the connection.",
   consent_timeout: "No one answered on the other computer within 30 seconds.",
-  consent_unavailable: "The other computer could not show the approval prompt. Set up unattended access with a PIN on it (carson-agent unattended on --pin).",
+  consent_unavailable: "The other computer could not show the approval prompt. Set up unattended access with a PIN on it (glenley-agent unattended on --pin).",
   pin_locked: "Too many wrong PINs. Unattended access on that computer is locked for 15 minutes.",
   pin_timeout: "The PIN was not entered in time.",
   host_disconnected: "The person at the other computer ended the session.",

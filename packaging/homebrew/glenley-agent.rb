@@ -1,38 +1,38 @@
 # Homebrew formula template for a tap repository named `homebrew-carson`
-# (users then run: brew install <you>/carson/carson-agent).
+# (users then run: brew install <you>/carson/glenley-agent).
 # The release workflow prints the URLs and SHA-256 values to paste below.
-class CarsonAgent < Formula
+class GlenleyAgent < Formula
   desc "Free remote desktop: view and control your own computers from your browser"
   homepage "https://github.com/shivambisen/carson-remote"
   version "0.1.0"
   license "Apache-2.0"
 
   on_arm do
-    url "https://github.com/shivambisen/carson-remote/releases/download/v#{version}/carson-agent-#{version}-macos-arm64.tar.gz"
+    url "https://github.com/shivambisen/carson-remote/releases/download/v#{version}/glenley-agent-#{version}-macos-arm64.tar.gz"
     sha256 "REPLACE_WITH_ARM64_SHA256"
   end
   on_intel do
-    url "https://github.com/shivambisen/carson-remote/releases/download/v#{version}/carson-agent-#{version}-macos-x86_64.tar.gz"
+    url "https://github.com/shivambisen/carson-remote/releases/download/v#{version}/glenley-agent-#{version}-macos-x86_64.tar.gz"
     sha256 "REPLACE_WITH_X86_64_SHA256"
   end
 
   depends_on :macos
-  depends_on macos: :sonoma # ScreenCaptureKit APIs used by carson need macOS 14
+  depends_on macos: :sonoma # ScreenCaptureKit APIs used by glenley need macOS 14
 
   def install
-    bin.install "carson-agent"
+    bin.install "glenley-agent"
   end
 
   def caveats
     <<~EOS
       Finish setup (pairs this Mac, asks for permissions, starts at login):
-        carson-agent setup --server https://YOUR-CARSON-SERVER
+        glenley-agent setup --server https://YOUR-CARSON-SERVER
 
       After `brew upgrade`, macOS may ask again for Screen Recording / Accessibility.
     EOS
   end
 
   test do
-    assert_match "carson-agent #{version}", shell_output("#{bin}/carson-agent --version")
+    assert_match "glenley-agent #{version}", shell_output("#{bin}/glenley-agent --version")
   end
 end

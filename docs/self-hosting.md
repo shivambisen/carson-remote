@@ -1,4 +1,4 @@
-# Run your own carson server for free
+# Run your own glenley server for free
 
 The server is small: it handles sign-in, the device list and connection setup, and relays
 encrypted traffic only when a direct connection is impossible. A free cloud VM is plenty.
@@ -12,7 +12,7 @@ encrypted traffic only when a direct connection is impossible. A free cloud VM i
    3478 and 49160-49400.
 3. **Free domain.** At <https://www.duckdns.org> create e.g. `mycarson.duckdns.org` → the public IP.
 4. **Google sign-in.** In <https://console.cloud.google.com>: create a project → **APIs & Services
-   → OAuth consent screen** (External; app name "carson"; your email) → **Credentials → Create
+   → OAuth consent screen** (External; app name "glenley"; your email) → **Credentials → Create
    credentials → OAuth client ID** → *Web application*, authorized redirect URI
    `https://mycarson.duckdns.org/auth/google/callback`. Copy the client ID and secret.
    While the consent screen is in *Testing*, add the Google accounts that may sign in under
@@ -33,13 +33,13 @@ encrypted traffic only when a direct connection is impossible. A free cloud VM i
    This installs Docker, opens the VM firewall, generates secrets into `/opt/carson/.env`,
    and starts carson-server, coturn (TURN relay) and Caddy (free automatic HTTPS from Let's Encrypt).
 
-7. Open `https://mycarson.duckdns.org` and sign in. On each computer to reach, install the carson
+7. Open `https://mycarson.duckdns.org` and sign in. On each computer to reach, install the glenley
    app and sign in with the same account.
 
 **Make "Sign in" in the app go to your server:** in your GitHub fork, set the repository
 variable `CARSON_DEFAULT_SERVER` (Settings → Secrets and variables → Actions → Variables) to
 `https://mycarson.duckdns.org` before tagging a release. Without it, people start the app once
-with `carson --server https://mycarson.duckdns.org` (or use `carson-agent setup`).
+with `glenley --server https://mycarson.duckdns.org` (or use `glenley-agent setup`).
 
 ## Option R: Render free tier (no card) + a free PostgreSQL (Neon)
 

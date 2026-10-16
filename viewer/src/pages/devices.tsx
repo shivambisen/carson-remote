@@ -55,7 +55,7 @@ function DeviceRow({ device, onRemove }: { device: Device; onRemove: (d: Device)
               <TooltipTrigger asChild>
                 <span className="ml-2 hidden font-mono text-xs sm:inline">{keyId(device.public_key)}</span>
               </TooltipTrigger>
-              <TooltipContent>Device key. The carson app on that computer shows the same value.</TooltipContent>
+              <TooltipContent>Device key. The glenley app on that computer shows the same value.</TooltipContent>
             </Tooltip>
           )}
         </div>
@@ -88,12 +88,12 @@ function EmptyState() {
       <div className="space-y-1">
         <h2 className="font-semibold">Add your first computer</h2>
         <p className="max-w-sm text-sm text-muted-foreground">
-          Install the carson app on the computer you want to reach and sign in with this same account. It shows up here on its own.
+          Install the glenley app on the computer you want to reach and sign in with this same account. It shows up here on its own.
         </p>
       </div>
       <Button asChild>
         <a href={DOWNLOADS_URL} target="_blank" rel="noreferrer">
-          <Download /> Download carson
+          <Download /> Download glenley
         </a>
       </Button>
       <a href="#/pair" className="text-xs text-muted-foreground underline-offset-4 hover:underline">

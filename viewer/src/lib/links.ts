@@ -1,2 +1,2 @@
-/** Where people download the carson app for the computer they want to reach. */
-export const DOWNLOADS_URL = "https://github.com/shivambisen/carson-remote/releases";
+/** Where people download the glenley app for the computer they want to reach. */
+export const DOWNLOADS_URL = "https://glenley.in/#download";

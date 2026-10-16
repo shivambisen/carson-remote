@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end check for milestone 2: carson-server (dev mode) + carson-agent.
+# End-to-end check for milestone 2: carson-server (dev mode) + glenley-agent.
 #   pair by browser sign-in (curl plays the browser: grant → agent's 127.0.0.1 hand-off)
 #   → agent online → agent stops → offline.
 # Usage: scripts/e2e-pairing.sh   (needs go, cargo, curl; runs on macOS and Linux)
@@ -40,7 +40,7 @@ wait_for() {
 echo "building…"
 (cd "$ROOT/server" && go build -o "$WORK/carson-server" ./cmd/carson-server)
 (cd "$ROOT/agent" && cargo build -q -p carson-agent)
-AGENT="$ROOT/agent/target/debug/carson-agent"
+AGENT="$ROOT/agent/target/debug/glenley-agent"
 
 CARSON_DEV=true CARSON_ADDR="127.0.0.1:$PORT" CARSON_PUBLIC_URL="$URL" CARSON_DB_PATH="$WORK/carson.db" \
   "$WORK/carson-server" >"$WORK/server.log" 2>&1 &

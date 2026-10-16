@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Builds carson for macOS, free of charge (ad-hoc code signature, no Apple Developer ID):
-#   dist/carson-<version>-macos-<arch>.zip          carson.app (menu-bar app; also holds the CLI)
-#   dist/carson-agent-<version>-macos-<arch>.tar.gz the command-line tool alone (Homebrew)
+# Builds glenley for macOS, free of charge (ad-hoc code signature, no Apple Developer ID):
+#   dist/glenley-<version>-macos-<arch>.zip          glenley.app (menu-bar app; also holds the CLI)
+#   dist/glenley-agent-<version>-macos-<arch>.tar.gz the command-line tool alone (Homebrew)
 # Downloads are quarantined, so users right-click → Open once; Homebrew installs are not.
 #
 #   packaging/macos/build.sh [aarch64-apple-darwin|x86_64-apple-darwin]
@@ -21,41 +21,43 @@ REL="target/$TARGET/release"
 OUT="$ROOT/dist"; mkdir -p "$OUT"
 STAGE=$(mktemp -d)
 
-# carson.app: menu-bar only (LSUIElement), screen-capture purpose string for the permission prompt.
-APP="$STAGE/carson.app"
-mkdir -p "$APP/Contents/MacOS"
-cp "$REL/carson" "$REL/carson-agent" "$APP/Contents/MacOS/"
+# glenley.app: menu-bar only (LSUIElement), screen-capture purpose string for the permission prompt.
+APP="$STAGE/glenley.app"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+cp "$ROOT/packaging/icons/glenley.icns" "$APP/Contents/Resources/glenley.icns"
+cp "$REL/glenley" "$REL/glenley-agent" "$APP/Contents/MacOS/"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleIdentifier</key><string>com.carson.agent</string>
-  <key>CFBundleName</key><string>carson</string>
-  <key>CFBundleDisplayName</key><string>carson</string>
-  <key>CFBundleExecutable</key><string>carson</string>
+  <key>CFBundleIdentifier</key><string>in.glenley.agent</string>
+  <key>CFBundleName</key><string>glenley</string>
+  <key>CFBundleDisplayName</key><string>glenley</string>
+  <key>CFBundleExecutable</key><string>glenley</string>
   <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleIconFile</key><string>glenley</string>
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
   <key>CFBundleVersion</key><string>$VERSION</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSScreenCaptureUsageDescription</key>
-  <string>carson shares this screen with your own devices when you connect to this computer.</string>
+  <string>glenley shares this screen with your own devices when you connect to this computer.</string>
 </dict>
 </plist>
 PLIST
 cp "$ROOT/LICENSE" "$APP/Contents/"
-codesign --force --deep --sign - --identifier com.carson.agent "$APP"
+codesign --force --deep --sign - --identifier in.glenley.agent "$APP"
 codesign --verify --deep "$APP"
-APPZIP="carson-$VERSION-macos-$ARCH.zip"
-(cd "$STAGE" && ditto -c -k --keepParent carson.app "$OUT/$APPZIP")
+APPZIP="glenley-$VERSION-macos-$ARCH.zip"
+(cd "$STAGE" && ditto -c -k --keepParent glenley.app "$OUT/$APPZIP")
 
 # The CLI alone, for Homebrew and scripts.
-NAME="carson-agent-$VERSION-macos-$ARCH"
+NAME="glenley-agent-$VERSION-macos-$ARCH"
 mkdir "$STAGE/$NAME"
-cp "$REL/carson-agent" "$STAGE/$NAME/"
-codesign --force --sign - --identifier com.carson.agent "$STAGE/$NAME/carson-agent"
+cp "$REL/glenley-agent" "$STAGE/$NAME/"
+codesign --force --sign - --identifier in.glenley.agent "$STAGE/$NAME/glenley-agent"
 cp "$ROOT/packaging/README-agent.txt" "$STAGE/$NAME/README.txt"
 cp "$ROOT/LICENSE" "$STAGE/$NAME/"
 tar -C "$STAGE" -czf "$OUT/$NAME.tar.gz" "$NAME"

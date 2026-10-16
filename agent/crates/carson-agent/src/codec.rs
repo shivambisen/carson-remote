@@ -2,7 +2,7 @@
 //! only H.264 encoder on platforms without a hardware one we support yet).
 //!
 //! Cisco's binary license requires that the end user's machine downloads it from Cisco, so
-//! carson never ships it. The file is verified against the official SHA-256 list before use.
+//! glenley never ships it. The file is verified against the official SHA-256 list before use.
 
 use std::io::Read;
 use std::path::PathBuf;
@@ -71,7 +71,7 @@ pub async fn ensure_openh264() -> Result<Option<PathBuf>> {
 #[cfg(test)]
 mod tests {
     /// Downloads Cisco's library for real and encodes with it.
-    /// `CARSON_OPENH264_DIR=/tmp/x cargo test -p carson-agent -- --ignored --nocapture cisco`
+    /// `CARSON_OPENH264_DIR=/tmp/x cargo test -p glenley-agent -- --ignored --nocapture cisco`
     #[tokio::test]
     #[ignore]
     async fn cisco_download_verifies_and_encodes() {

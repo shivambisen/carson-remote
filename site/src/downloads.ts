@@ -19,22 +19,22 @@ export const DOWNLOADS: Record<Download["platform"], Download> = {
     platform: "mac-arm",
     label: "macOS",
     detail: "Apple Silicon (M1 and later) · macOS 14+",
-    file: "carson-macos-arm64.zip",
-    href: `${LATEST}/carson-macos-arm64.zip`,
+    file: "glenley-macos-arm64.zip",
+    href: `${LATEST}/glenley-macos-arm64.zip`,
   },
   "mac-intel": {
     platform: "mac-intel",
     label: "macOS (Intel)",
     detail: "Intel Macs · macOS 14+",
-    file: "carson-macos-x86_64.zip",
-    href: `${LATEST}/carson-macos-x86_64.zip`,
+    file: "glenley-macos-x86_64.zip",
+    href: `${LATEST}/glenley-macos-x86_64.zip`,
   },
   windows: {
     platform: "windows",
     label: "Windows",
     detail: "Windows 10 (1903) or later · 64-bit",
-    file: "carson-setup-windows-x86_64.exe",
-    href: `${LATEST}/carson-setup-windows-x86_64.exe`,
+    file: "glenley-setup-windows-x86_64.exe",
+    href: `${LATEST}/glenley-setup-windows-x86_64.exe`,
   },
 };
 

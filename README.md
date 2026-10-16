@@ -1,22 +1,24 @@
-# carson
+# glenley
 
 Free remote desktop for your own computers. Sign in, pick one of your devices, and view and
 control its screen from a browser. Video, keyboard and mouse go **directly and encrypted**
 between your computers; a small self-hosted server introduces them and relays only when a
 network blocks direct connections.
 
-- **Free:** no paid services needed (free VM, free domain, free HTTPS, free codecs).
-- **Simple:** one command per computer: `carson-agent setup --server https://your-server`.
-- **Private:** only your account's devices, a visible "being controlled" banner, an Allow/Deny prompt
-  (or a PIN for unattended use), signed end-to-end connections, and an activity log.
+- **Free:** no paid services needed (free hosting, free domain, free HTTPS, free codecs).
+- **Simple:** install the glenley app, sign in with Google, done: no codes. Connect from
+  https://app.glenley.in (or your own server) in any browser. Website: https://glenley.in
+- **Private:** only your account's computers, signed end-to-end connections, an activity log,
+  and the menu-bar / tray icon always shows when someone is connected (an Allow prompt, an
+  on-screen pill and a PIN are optional).
 
 ## Quick start
 
 1. **Server** (once, about 10 minutes, $0): follow [docs/self-hosting.md](docs/self-hosting.md)
    (Oracle Cloud Always Free + DuckDNS + one script).
-2. **Each computer to reach**: install `carson-agent` from the
+2. **Each computer to reach**: install `glenley-agent` from the
    [releases](../../releases) (or Homebrew), then
-   `carson-agent setup --server https://your-server`.
+   `glenley-agent setup --server https://your-server`.
 3. **From anywhere:** open your server in a browser, sign in, click **View**.
 
 Details: [docs/user-guide.md](docs/user-guide.md) · Test plan: [docs/e2e-test-plan.md](docs/e2e-test-plan.md) ·
@@ -35,7 +37,7 @@ Design: [docs/carson-design.md](docs/carson-design.md)
 | Component | Path | Stack |
 |---|---|---|
 | `carson-server` | [server/](server/) | Go: signaling, device registry, presence, auth |
-| `carson-agent` | [agent/](agent/) | Rust: capture, encode, input injection (host) |
+| `glenley-agent` | [agent/](agent/) | Rust: capture, encode, input injection (host) |
 | `carson-viewer` | [viewer/](viewer/) | TypeScript + Vite: browser viewer |
 | protocol fixtures | [proto/](proto/) | shared by all three test suites |
 | deploy | [deploy/](deploy/) | docker compose: server + coturn (+ Caddy in prod) |
@@ -46,7 +48,7 @@ Go 1.27+, Rust stable (via rustup), Node 22+, Docker.
 
 ## Run locally (dev mode)
 
-Dev mode enables an email-only login (no verification) so you can try carson without OAuth apps.
+Dev mode enables an email-only login (no verification) so you can try glenley without OAuth apps.
 
 ```bash
 # 1. Server + viewer on http://localhost:8080
@@ -76,8 +78,8 @@ connected; its **Disconnect** button ends the session. For unattended access (no
 computer), run this on the host itself; it can never be switched on remotely:
 
 ```bash
-carson-agent unattended on --pin   # viewers must enter the PIN (5 tries, then 15 min lockout)
-carson-agent unattended off        # back to Allow/Deny prompts
+glenley-agent unattended on --pin   # viewers must enter the PIN (5 tries, then 15 min lockout)
+glenley-agent unattended off        # back to Allow/Deny prompts
 ```
 
 The PIN is checked on the host, inside the encrypted connection, and stored only as an
@@ -86,7 +88,7 @@ Argon2id hash. The banner still appears in unattended mode.
 **Security:** every connection is listed on the **Activity** page (who, when, from which IP and
 browser, how it ended). **Remove** on the devices page revokes a device instantly. The viewer
 checks that each stream is signed by the device's own key (shown as "key …"; compare it with
-`carson-agent status` on that computer) and refuses a device whose key changed.
+`glenley-agent status` on that computer) and refuses a device whose key changed.
 
 **Networks:** connections are direct when possible and fall back to the TURN relay (coturn)
 on strict NATs and firewalls. Set `CARSON_TURN_SECRET` (shared with coturn) and `CARSON_TURN_URLS`;
@@ -97,7 +99,7 @@ session for up to 30 s, and the media path restarts ICE automatically.
 **macOS permissions:** grant the app that runs the agent (e.g. Terminal) **Screen Recording**
 and **Accessibility** (for control) in System Settings → Privacy & Security, then restart it.
 Without Accessibility the viewer shows "view only".
-`carson-agent capture-check` verifies capture works. `carson-agent run --test-pattern` streams a
+`glenley-agent capture-check` verifies capture works. `glenley-agent run --test-pattern` streams a
 synthetic pattern instead (no permission needed; input is only logged). Other flags: `--fps`,
 `--max-width`, `--bitrate-kbps`, `--display`, `--input native|log|off`, `--no-clipboard`.
 
@@ -124,7 +126,7 @@ scripts/e2e-pairing.sh   # real server + real agent: pair, online, offline
 Push a tag `vX.Y.Z`: `.github/workflows/release.yml` builds macOS (arm64, x86_64) and Windows
 agents, server tarballs (viewer bundled) for Linux/macOS/Windows, a multi-arch server image on
 ghcr.io, and a GitHub Release with checksums. Copy the macOS checksums into
-`packaging/homebrew/carson-agent.rb` in your `homebrew-carson` tap. Release agents are built with
+`packaging/homebrew/glenley-agent.rb` in your `homebrew-carson` tap. Release agents are built with
 `--no-default-features`, so they never contain source-compiled OpenH264 (Cisco's royalty coverage
 applies only to its own binaries, which `setup` downloads from Cisco).
 
@@ -134,6 +136,6 @@ All eight milestones (M1–M8) are implemented; see the milestone table and as-b
 
 ## License
 
-carson is free and open source under the [Apache License 2.0](LICENSE). The OpenH264 codec
+glenley is free and open source under the [Apache License 2.0](LICENSE). The OpenH264 codec
 that `setup` downloads is Cisco's binary under Cisco's own license, not part of this project
 ("OpenH264 Video Codec provided by Cisco Systems, Inc.").

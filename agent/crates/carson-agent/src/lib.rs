@@ -1,6 +1,6 @@
-//! carson host agent, shared by two binaries:
-//! - `carson-agent`: the command-line tool (`setup`, `run`, …).
-//! - `carson`: the tray app people double-click (no console window on Windows; a menu-bar
+//! glenley host agent, shared by two binaries:
+//! - `glenley-agent`: the command-line tool (`setup`, `run`, …).
+//! - `glenley`: the tray app people double-click (no console window on Windows; a menu-bar
 //!   item on macOS). Without arguments it starts the tray; with arguments it is the CLI.
 
 mod abr;
@@ -37,20 +37,20 @@ use crate::identity::DeviceKey;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const USAGE: &str = "\
-carson-agent — share and control this computer with carson
+glenley-agent — share and control this computer with glenley
 
 USAGE:
-    carson-agent [OPTIONS] <COMMAND>
+    glenley-agent [OPTIONS] <COMMAND>
 
 COMMANDS:
-    app [--server <URL>]                  Start the tray app (what double-clicking `carson` does)
+    app [--server <URL>]                  Start the tray app (what double-clicking `glenley` does)
     setup --server <URL> [--name <NAME>]  One-step install: pair, permissions, codec, start at login
-    pair --server <URL> [--name <NAME>]   Enroll this computer with your carson account
+    pair --server <URL> [--name <NAME>]   Enroll this computer with your glenley account
     run [MEDIA OPTIONS]                   Stay online and share this screen with your viewers
     capture-check [MEDIA OPTIONS]         Check screen capture works (permission, frame rate)
     status                                Show pairing state
     unpair                                Forget this computer's identity (local only)
-    service install | uninstall | status  Start carson automatically at login (or stop doing so)
+    service install | uninstall | status  Start glenley automatically at login (or stop doing so)
     ask on | off                          Ask \"Allow?\" here before each connection (default off)
     indicator on | off                    Show an on-screen pill while someone is connected
                                           (default off; the tray icon always shows it)
@@ -104,7 +104,7 @@ enum Command {
     Indicator(bool),
     /// Hidden: host UI helper process (consent prompt / banner), spawned by `run`.
     Ui(Vec<String>),
-    /// The tray app (default for the `carson` binary). `server`: where "Sign in" goes.
+    /// The tray app (default for the `glenley` binary). `server`: where "Sign in" goes.
     App {
         server: Option<String>,
     },
@@ -274,7 +274,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Cli> {
         },
         Some("setup") => Command::Setup {
             server: server
-                .context("setup needs --server <URL> (the address of your carson server)")?,
+                .context("setup needs --server <URL> (the address of your glenley server)")?,
             name,
             open_browser: !no_browser,
             install_service: !no_service,
@@ -344,7 +344,7 @@ fn default_name() -> String {
     let host = host.trim_end_matches(".local").trim();
     let name: String = host.chars().filter(|c| !c.is_control()).take(64).collect();
     if name.is_empty() {
-        "carson device".into()
+        "glenley device".into()
     } else {
         name
     }
@@ -353,7 +353,7 @@ fn default_name() -> String {
 async fn pair(dir: PathBuf, server: &str, name: Option<String>, open_browser: bool) -> Result<()> {
     if let Some(existing) = config::load(&dir)? {
         bail!(
-            "already paired with {} as {} ({}); run `carson-agent unpair` first",
+            "already paired with {} as {} ({}); run `glenley-agent unpair` first",
             existing.server_url,
             existing.name,
             existing.device_id
@@ -372,7 +372,7 @@ async fn pair(dir: PathBuf, server: &str, name: Option<String>, open_browser: bo
     // Browser sign-in (no code): the page hands a one-time grant back to this loopback port.
     let loopback = signin::Loopback::bind().await?;
     let link = loopback.url(&server, &start.pairing_id);
-    println!("To add \"{name}\" to your carson account, sign in at:\n\n    {link}\n");
+    println!("To add \"{name}\" to your glenley account, sign in at:\n\n    {link}\n");
     if open_browser && service::open_browser(&link) {
         println!("(opened in your browser)");
     }
@@ -426,7 +426,7 @@ async fn pair(dir: PathBuf, server: &str, name: Option<String>, open_browser: bo
         }
     }
     let _ = store.delete();
-    bail!("sign-in expired; run `carson-agent setup` again")
+    bail!("sign-in expired; run `glenley-agent setup` again")
 }
 
 /// Percent-encodes a query value.
@@ -436,11 +436,11 @@ fn url_escape(s: &str) -> String {
 
 fn load_paired(dir: &std::path::Path) -> Result<(AgentConfig, DeviceKey)> {
     let cfg =
-        config::load(dir)?.context("not paired yet; run `carson-agent pair --server <URL>`")?;
+        config::load(dir)?.context("not paired yet; run `glenley-agent pair --server <URL>`")?;
     let seed = keystore::default_store(&cfg.server_url, dir)?
         .load()?
         .context(
-            "device key missing from key store; run `carson-agent unpair` then `pair` again",
+            "device key missing from key store; run `glenley-agent unpair` then `pair` again",
         )?;
     Ok((cfg, DeviceKey::from_seed(&seed)))
 }
@@ -464,7 +464,9 @@ async fn run(dir: PathBuf, media: media::MediaOptions) -> Result<()> {
             tracing::info!("connections need the PIN")
         }
         consent::AccessPolicy::Unattended { pin_hash: None } => {
-            tracing::info!("your account connects without asking (`carson-agent ask on` to change)")
+            tracing::info!(
+                "your account connects without asking (`glenley-agent ask on` to change)"
+            )
         }
         consent::AccessPolicy::Automatic => {
             tracing::info!("test pattern: no consent prompt or banner")
@@ -494,7 +496,7 @@ async fn setup(
     open_browser: bool,
     install_service: bool,
 ) -> Result<()> {
-    println!("carson setup\n");
+    println!("glenley setup\n");
     println!("1/4  Pairing");
     match config::load(&dir)? {
         Some(cfg) => println!(
@@ -518,7 +520,7 @@ async fn setup(
                     "     Screen Recording: NOT allowed yet. In System Settings > Privacy & Security >"
                 );
                 println!(
-                    "     Screen & System Audio Recording, turn on carson-agent, then run setup again."
+                    "     Screen & System Audio Recording, turn on glenley-agent, then run setup again."
                 );
                 let _ = service::open_browser(
                     "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
@@ -551,7 +553,7 @@ async fn setup(
     if install_service {
         service::install(&dir)?;
     } else {
-        println!("     skipped (--no-service); start manually with `carson-agent run`");
+        println!("     skipped (--no-service); start manually with `glenley-agent run`");
     }
 
     let cfg = config::load(&dir)?.context("pairing did not complete")?;
@@ -560,7 +562,7 @@ async fn setup(
         cfg.server_url
     );
     println!(
-        "Your account can now connect from the website. To be asked first: `carson-agent ask on`."
+        "Your account can now connect from the website. To be asked first: `glenley-agent ask on`."
     );
     Ok(())
 }
@@ -571,7 +573,7 @@ async fn capture_check(media: &media::MediaOptions) -> Result<()> {
     tokio::task::spawn_blocking(move || -> Result<()> {
         let mut cap = media::open_source(&opts).map_err(|e| {
             if e.chain().any(|c| c.is::<carson_capture::PermissionDenied>()) {
-                e.context("grant Screen Recording to the app running carson-agent (e.g. Terminal), then restart it")
+                e.context("grant Screen Recording to the app running glenley-agent (e.g. Terminal), then restart it")
             } else {
                 e
             }
@@ -640,7 +642,7 @@ fn update_setting(
     change: impl FnOnce(&mut config::AgentConfig),
 ) -> Result<()> {
     let mut cfg =
-        config::load(dir)?.context("not paired yet; run `carson-agent setup --server <URL>`")?;
+        config::load(dir)?.context("not paired yet; run `glenley-agent setup --server <URL>`")?;
     change(&mut cfg);
     config::save(dir, &cfg)
 }
@@ -648,7 +650,7 @@ fn update_setting(
 /// Turns PIN-protected access on or off. Must be run at this computer: it is never remotely settable.
 fn set_unattended(dir: PathBuf, enable: bool, with_pin: bool) -> Result<()> {
     let mut cfg =
-        config::load(&dir)?.context("not paired yet; run `carson-agent pair --server <URL>`")?;
+        config::load(&dir)?.context("not paired yet; run `glenley-agent pair --server <URL>`")?;
     cfg.unattended = enable;
     cfg.pin_hash = None;
     if enable && with_pin {
@@ -660,7 +662,7 @@ fn set_unattended(dir: PathBuf, enable: bool, with_pin: bool) -> Result<()> {
             anyhow::ensure!(pin == again, "PINs do not match");
             pin
         } else {
-            // Scripted setup: `echo 123456 | carson-agent unattended on --pin`.
+            // Scripted setup: `echo 123456 | glenley-agent unattended on --pin`.
             let mut line = String::new();
             std::io::stdin().read_line(&mut line)?;
             line.trim().to_owned()
@@ -677,7 +679,7 @@ fn set_unattended(dir: PathBuf, enable: bool, with_pin: bool) -> Result<()> {
             "PIN access is on: viewers must enter the PIN (applies to the next connection)."
         ),
         (true, false) => {
-            println!("No PIN set; use `carson-agent unattended on --pin` to require one.");
+            println!("No PIN set; use `glenley-agent unattended on --pin` to require one.");
         }
     }
     Ok(())
@@ -706,13 +708,13 @@ fn install_tls_provider() {
 }
 
 /// Entry point of both binaries. With no arguments, `app_by_default` starts the tray app
-/// (the `carson` binary) instead of printing help.
+/// (the `glenley` binary) instead of printing help.
 pub fn main_entry(app_by_default: bool) -> ExitCode {
     install_tls_provider();
     carson_input::enable_dpi_awareness();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let parsed = parse_args(args.clone()).and_then(|cli| {
-        // `carson` with only options (e.g. --config-dir) still means the tray app.
+        // `glenley` with only options (e.g. --config-dir) still means the tray app.
         let asked_for_help = args.iter().any(|a| a == "-h" || a == "--help");
         if app_by_default && matches!(cli.command, Command::Help) && !asked_for_help {
             parse_args(args.into_iter().chain(["app".to_owned()]))
@@ -723,14 +725,14 @@ pub fn main_entry(app_by_default: bool) -> ExitCode {
     let cli = match parsed {
         Ok(cli) => cli,
         Err(e) => {
-            eprintln!("carson-agent: {e:#}");
+            eprintln!("glenley-agent: {e:#}");
             return ExitCode::from(2);
         }
     };
     let dir = match cli.config_dir.clone().map_or_else(config::default_dir, Ok) {
         Ok(d) => d,
         Err(e) => {
-            eprintln!("carson-agent: {e:#}");
+            eprintln!("glenley-agent: {e:#}");
             return ExitCode::FAILURE;
         }
     };
@@ -748,14 +750,14 @@ pub fn main_entry(app_by_default: bool) -> ExitCode {
         let result: Result<()> = {
             let _ = server;
             Err(anyhow::anyhow!(
-                "the tray app is available on macOS and Windows; use `carson-agent run`"
+                "the tray app is available on macOS and Windows; use `glenley-agent run`"
             ))
         };
         return match result {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
-                tracing::error!(error = %format!("{e:#}"), "carson app failed");
-                eprintln!("carson: {e:#}");
+                tracing::error!(error = %format!("{e:#}"), "glenley app failed");
+                eprintln!("glenley: {e:#}");
                 ExitCode::FAILURE
             }
         };
@@ -764,7 +766,7 @@ pub fn main_entry(app_by_default: bool) -> ExitCode {
     match tokio::runtime::Runtime::new() {
         Ok(rt) => rt.block_on(cli_main(cli, dir)),
         Err(e) => {
-            eprintln!("carson-agent: start runtime: {e}");
+            eprintln!("glenley-agent: start runtime: {e}");
             ExitCode::FAILURE
         }
     }
@@ -778,7 +780,7 @@ async fn cli_main(cli: Cli, dir: PathBuf) -> ExitCode {
         }
         Command::Version => {
             println!(
-                "carson-agent {VERSION} (protocol v{})",
+                "glenley-agent {VERSION} (protocol v{})",
                 carson_proto::PROTOCOL_VERSION
             );
             Ok(())
@@ -791,7 +793,7 @@ async fn cli_main(cli: Cli, dir: PathBuf) -> ExitCode {
             // Under a service manager, a fatal error (device removed, duplicate instance)
             // stops the service instead of triggering endless restarts.
             Err(e) => {
-                tracing::error!(error = %format!("{e:#}"), "stopping the carson service");
+                tracing::error!(error = %format!("{e:#}"), "stopping the glenley service");
                 Ok(())
             }
             ok => ok,
@@ -842,7 +844,7 @@ async fn cli_main(cli: Cli, dir: PathBuf) -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("carson-agent: {e:#}");
+            eprintln!("glenley-agent: {e:#}");
             ExitCode::FAILURE
         }
     }

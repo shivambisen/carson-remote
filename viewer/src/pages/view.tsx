@@ -184,7 +184,7 @@ function RemoteScreen({ device, options }: { device: Device; options: SessionOpt
     // Always measured at event time, so resizing or fullscreen never shifts the pointer.
     const point = (e: PointerEvent | WheelEvent) => normalizePoint(e.clientX, e.clientY, video.getBoundingClientRect(), video.videoWidth, video.videoHeight);
 
-    // Clicks on carson's own UI over the picture (PIN box, overlay buttons) stay local.
+    // Clicks on glenley's own UI over the picture (PIN box, overlay buttons) stay local.
     const onUi = (e: Event) => (e.target as HTMLElement).closest("[data-ui]") !== null;
     const onMove = (e: PointerEvent) => {
       if (!controlling() || onUi(e)) return;

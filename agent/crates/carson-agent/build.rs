@@ -13,13 +13,13 @@ fn main() {
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleIdentifier</key><string>com.carson.agent</string>
-  <key>CFBundleName</key><string>carson-agent</string>
-  <key>CFBundleDisplayName</key><string>carson</string>
+  <key>CFBundleIdentifier</key><string>in.glenley.agent</string>
+  <key>CFBundleName</key><string>glenley-agent</string>
+  <key>CFBundleDisplayName</key><string>glenley</string>
   <key>CFBundleShortVersionString</key><string>{version}</string>
   <key>CFBundleVersion</key><string>{version}</string>
   <key>NSScreenCaptureUsageDescription</key>
-  <string>carson shares this screen with your own devices when you allow a connection.</string>
+  <string>glenley shares this screen with your own devices when you allow a connection.</string>
 </dict>
 </plist>
 "#
