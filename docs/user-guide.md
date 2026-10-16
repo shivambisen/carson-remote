@@ -9,8 +9,11 @@ you want to reach runs the glenley app.
 **Windows:** download `glenley-setup-…-windows-x86_64.exe` and run it. No admin rights are needed.
 If SmartScreen warns (the app isn't signed yet): **More info → Run anyway**.
 
-**Mac:** download `carson-…-macos-arm64.zip` (Apple Silicon) or `…-x86_64` (Intel), unzip, drag
-**glenley** to Applications, then right-click it → **Open** once (it isn't notarized).
+**Mac:** download `glenley-…-macos-arm64.zip` (Apple Silicon) or `…-x86_64` (Intel), unzip, and
+drag **glenley** to Applications. Because the app isn't notarized yet, macOS first says it
+"could not verify" glenley: click **Done**, then **System Settings → Privacy & Security → Open
+Anyway**, and confirm with your password. (Or in Terminal:
+`xattr -dr com.apple.quarantine /Applications/glenley.app`.)
 
 On first launch glenley opens your browser: **sign in** (e.g. with Google) and the computer is
 added to your account, with no code to type. glenley then lives in the menu bar / notification area

@@ -523,7 +523,7 @@ function DownloadCard({ platform, current }: { platform: "mac-arm" | "windows"; 
       <p className="mt-5 text-[12px] leading-relaxed text-faint">
         {platform === "windows"
           ? "Windows may say it protected your PC, because the app isn't signed yet: choose More info → Run anyway."
-          : "Unzip and move glenley to Applications. The first time, right-click it and choose Open. Allow Screen Recording and Accessibility when asked."}
+          : "Unzip and move glenley to Applications. The first time, macOS says it can't verify the app (it isn't notarized yet): click Done, then System Settings → Privacy & Security → Open Anyway. Allow Screen Recording and Accessibility when asked."}
       </p>
     </div>
   );
