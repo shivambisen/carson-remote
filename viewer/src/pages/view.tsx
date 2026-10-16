@@ -85,6 +85,7 @@ function RemoteScreen({ device, options }: { device: Device; options: SessionOpt
   const routerRef = useRef<InputRouter | null>(null);
   const controlRef = useRef(true);
   const inputAvailableRef = useRef(false);
+  const inputKnownRef = useRef<boolean | null>(null);
   const statsOnRef = useRef(false);
 
   const [status, setStatus] = useState<Status>({ kind: "connecting", detail: "Connecting…" });
@@ -92,6 +93,7 @@ function RemoteScreen({ device, options }: { device: Device; options: SessionOpt
   const [pin, setPin] = useState<{ open: boolean; message: string; error: boolean }>({ open: false, message: "", error: false });
   const [pinValue, setPinValue] = useState("");
   const [inputAvailable, setInputAvailable] = useState(false);
+  const [inputMessage, setInputMessage] = useState("");
   const [control, setControl] = useState(true);
   const [statsOn, setStatsOn] = useState(false);
   const [statsText, setStatsText] = useState("");
@@ -163,9 +165,13 @@ function RemoteScreen({ device, options }: { device: Device; options: SessionOpt
           } else if (m.type === "encoder_status") {
             encoderLine = `${m.encoder} · target ${(m.bitrate_kbps / 1000).toFixed(1)} Mbps · ${m.fps} fps · ${m.scale_pct}%`;
           } else if (m.type === "input_status") {
+            // Repeated about once a second: only react to changes.
+            const changed = inputKnownRef.current !== m.available;
+            inputKnownRef.current = m.available;
             inputAvailableRef.current = m.available;
             setInputAvailable(m.available);
-            if (!m.available) toast.warning(`View only: ${m.message ?? "input unavailable"}`);
+            setInputMessage(m.message ?? "");
+            if (changed && !m.available) toast.warning(`View only: ${m.message ?? "input unavailable"}`);
           }
         },
         onClipboard: (text) => {
@@ -369,7 +375,15 @@ function RemoteScreen({ device, options }: { device: Device; options: SessionOpt
               </Label>
             </div>
           </TooltipTrigger>
-          <TooltipContent>{inputAvailable ? "Send your mouse and keyboard to this computer" : "View only on this computer"}</TooltipContent>
+          <TooltipContent>
+            {inputAvailable
+              ? "Send your mouse and keyboard to this computer"
+              : status.kind !== "live"
+                ? "Available once the connection is live"
+                : inputMessage
+                  ? `View only: ${inputMessage}`
+                  : "Waiting for the other computer…"}
+          </TooltipContent>
         </Tooltip>
         <Tooltip>
           <TooltipTrigger asChild>

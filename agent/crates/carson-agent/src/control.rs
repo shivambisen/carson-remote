@@ -370,6 +370,11 @@ pub async fn run(
                                     scale_pct: q.scale_pct,
                                 })
                                 .await;
+                                // Repeat the input status with every stats reply (~1 s), so a
+                                // viewer that missed the first one (or reconnected) recovers.
+                                if let Some(st) = &status {
+                                    send_control(&ctl, st).await;
+                                }
                             }
                             // Clock sync for the viewer's glass-to-glass latency measurement.
                             Ok(ControlMessage::Ping { t }) => {

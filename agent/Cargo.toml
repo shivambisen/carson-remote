@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/carson-agent", "crates/carson-proto", "crates/carson-capture", "crates/carson-encode", "crates/carson-input", "crates/carson-hostui"]
 
 [workspace.package]
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 license = "Apache-2.0"
 publish = false
