@@ -641,8 +641,17 @@ fn unpair(dir: PathBuf) -> Result<()> {
     Ok(())
 }
 
+/// Dependencies enable both of rustls' crypto backends (reqwest: aws-lc-rs, webrtc: ring), so
+/// rustls can't choose a process default and panics on the first TLS connection that relies on
+/// it (the signaling WebSocket to an https server). Pick one explicitly, before anything else.
+fn install_tls_provider() {
+    // Err only means a provider is already installed, which is fine.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
+    install_tls_provider();
     let cli = match parse_args(std::env::args().skip(1)) {
         Ok(cli) => cli,
         Err(e) => {
@@ -717,6 +726,14 @@ async fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tls_provider_is_installed_for_https_connections() {
+        install_tls_provider();
+        install_tls_provider(); // idempotent
+        // Panics without a process default when both backends are compiled in.
+        let _ = rustls::ClientConfig::builder();
+    }
 
     fn parse(args: &[&str]) -> Result<Cli> {
         parse_args(args.iter().map(|s| s.to_string()))
