@@ -1,0 +1,34 @@
+# Render Blueprint: one free web service running carson-server with the viewer bundled.
+# Dashboard → New → Blueprint → this repository. You are asked for the three secret values
+# (sync: false); everything else is set here. Data lives in PostgreSQL (e.g. Neon), since free
+# Render services have no persistent disk.
+#
+# No TURN relay: Render only exposes HTTP(S), not the UDP ports a relay needs. Direct
+# connections (most home and mobile networks) work; very strict networks may not.
+services:
+  - type: web
+    name: carson
+    runtime: docker
+    plan: free
+    region: ohio # next to a Neon us-east-2 database: ~1 ms per query
+    dockerfilePath: ./server/Dockerfile
+    dockerContext: .
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: CARSON_DEV
+        value: "false"
+      - key: CARSON_PUBLIC_URL
+        value: https://remote.glenley.in
+      - key: CARSON_TRUST_PROXY
+        value: "true"
+      - key: CARSON_TURN_SECRET
+        generateValue: true
+      - key: CARSON_STUN_URLS
+        value: stun:stun.cloudflare.com:3478,stun:stun.l.google.com:19302
+      - key: CARSON_DATABASE_URL
+        sync: false
+      - key: CARSON_GOOGLE_CLIENT_ID
+        sync: false
+      - key: CARSON_GOOGLE_CLIENT_SECRET
+        sync: false

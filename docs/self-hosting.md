@@ -41,6 +41,17 @@ variable `CARSON_DEFAULT_SERVER` (Settings → Secrets and variables → Actions
 `https://mycarson.duckdns.org` before tagging a release. Without it, people start the app once
 with `carson --server https://mycarson.duckdns.org` (or use `carson-agent setup`).
 
+## Option R: Render free tier (no card) + a free PostgreSQL (Neon)
+
+[render.yaml](../render.yaml) describes the service. In Render: **New → Blueprint** → pick this
+repository → enter `CARSON_DATABASE_URL`, `CARSON_GOOGLE_CLIENT_ID`, `CARSON_GOOGLE_CLIENT_SECRET`
+→ **Apply**. Then **Settings → Custom Domains** → add your domain and create the CNAME record it
+shows. Edit `CARSON_PUBLIC_URL` in render.yaml (or in the dashboard) to your domain, and use
+`https://<domain>/auth/google/callback` as the Google redirect URI.
+
+Limits: free services sleep after 15 minutes without traffic (connected computers keep
+reconnecting, which wakes it within about a minute), and there is no TURN relay.
+
 ## Option B: any VPS or home server
 
 Same script on any Ubuntu machine with a public IP. At home, forward TCP 80/443/3478 and UDP

@@ -96,3 +96,15 @@ func TestLoadRejectsBadValues(t *testing.T) {
 		})
 	}
 }
+
+func TestAddrFollowsPlatformPort(t *testing.T) {
+	env := map[string]string{"CARSON_DEV": "true", "PORT": "10000"}
+	cfg, err := Load(func(k string) string { return env[k] })
+	if err != nil || cfg.Addr != ":10000" {
+		t.Fatalf("Addr = %q, %v", cfg.Addr, err)
+	}
+	env["CARSON_ADDR"] = "127.0.0.1:9000"
+	if cfg, _ := Load(func(k string) string { return env[k] }); cfg.Addr != "127.0.0.1:9000" {
+		t.Fatalf("CARSON_ADDR must win, got %q", cfg.Addr)
+	}
+}

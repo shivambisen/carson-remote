@@ -59,7 +59,7 @@ func Load(getenv func(string) string) (Config, error) {
 
 	var errs []error
 	cfg := Config{
-		Addr:        get("CARSON_ADDR", ":8080"),
+		Addr:        get("CARSON_ADDR", portAddr(getenv("PORT"))), // $PORT: Render and similar hosts
 		DBPath:      get("CARSON_DB_PATH", "./data/carson.db"),
 		DatabaseURL: get("CARSON_DATABASE_URL", ""),
 		TURNSecret:  getenv("CARSON_TURN_SECRET"),
@@ -145,4 +145,12 @@ func splitList(s string) []string {
 		}
 	}
 	return out
+}
+
+// portAddr is ":$PORT" when the hosting platform assigns a port, else the default ":8080".
+func portAddr(port string) string {
+	if p := strings.TrimSpace(port); p != "" {
+		return ":" + p
+	}
+	return ":8080"
 }
