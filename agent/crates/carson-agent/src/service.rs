@@ -5,9 +5,10 @@
 //! - Windows: Task Scheduler task "carson-agent" (at logon, normal privileges)
 //! - Linux: systemd user unit `~/.config/systemd/user/carson-agent.service`
 //!
-//! The service runs `carson-agent run --service`. In service mode, errors that a restart cannot
-//! fix (device removed, another instance running) exit with status 0 so the service manager
-//! stops instead of restarting in a loop; crashes still restart it.
+//! On macOS and Windows it starts the tray app (`carson app`) when that binary is installed,
+//! otherwise (and on Linux) `carson-agent run --service`. Errors that a restart cannot fix
+//! (device removed, another instance running) and Quit exit with status 0 so the service
+//! manager stops instead of restarting in a loop; crashes still restart it.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -21,8 +22,39 @@ pub fn log_path(dir: &Path) -> PathBuf {
     dir.join("agent.log")
 }
 
-fn exe() -> Result<PathBuf> {
-    std::env::current_exe().context("locate carson-agent executable")
+/// What the login item starts: the program and its trailing arguments.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Launch {
+    pub exe: PathBuf,
+    pub args: Vec<String>,
+}
+
+/// The tray app if it is installed (this binary, or `carson` next to `carson-agent`), else
+/// the headless agent.
+fn launch() -> Result<Launch> {
+    let exe = std::env::current_exe().context("locate carson-agent executable")?;
+    let app_name = if cfg!(windows) {
+        "carson.exe"
+    } else {
+        "carson"
+    };
+    let tray_supported = cfg!(any(target_os = "macos", target_os = "windows"));
+    let is_app = exe.file_name().is_some_and(|n| n == app_name);
+    let sibling = exe.with_file_name(app_name);
+    Ok(match () {
+        _ if tray_supported && is_app => Launch {
+            exe,
+            args: vec!["app".into()],
+        },
+        _ if tray_supported && sibling.is_file() => Launch {
+            exe: sibling,
+            args: vec!["app".into()],
+        },
+        _ => Launch {
+            exe,
+            args: vec!["run".into(), "--service".into()],
+        },
+    })
 }
 
 fn run(cmd: &mut Command) -> Result<()> {
@@ -55,8 +87,13 @@ fn xml(s: &str) -> String {
 
 /// The LaunchAgent definition (pure; unit-tested on every OS).
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-pub fn launch_agent_plist(exe: &Path, config_dir: &Path) -> String {
+pub fn launch_agent_plist(launch: &Launch, config_dir: &Path) -> String {
     let log = log_path(config_dir);
+    let args: String = launch
+        .args
+        .iter()
+        .map(|a| format!("\n    <string>{}</string>", xml(a)))
+        .collect();
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -67,9 +104,7 @@ pub fn launch_agent_plist(exe: &Path, config_dir: &Path) -> String {
   <array>
     <string>{exe}</string>
     <string>--config-dir</string><string>{dir}</string>
-    <string>--log-file</string><string>{log}</string>
-    <string>run</string>
-    <string>--service</string>
+    <string>--log-file</string><string>{log}</string>{args}
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
@@ -79,7 +114,7 @@ pub fn launch_agent_plist(exe: &Path, config_dir: &Path) -> String {
 </dict>
 </plist>
 "#,
-        exe = xml(&exe.display().to_string()),
+        exe = xml(&launch.exe.display().to_string()),
         dir = xml(&config_dir.display().to_string()),
         log = xml(&log.display().to_string()),
     )
@@ -87,18 +122,25 @@ pub fn launch_agent_plist(exe: &Path, config_dir: &Path) -> String {
 
 /// The systemd user unit (pure; unit-tested on every OS).
 #[cfg_attr(any(target_os = "macos", target_os = "windows"), allow(dead_code))]
-pub fn systemd_unit(exe: &Path, config_dir: &Path) -> String {
+pub fn systemd_unit(launch: &Launch, config_dir: &Path) -> String {
     let q = |p: &Path| format!("\"{}\"", p.display().to_string().replace('"', "\\\""));
     format!(
-        "[Unit]\nDescription=carson remote desktop agent\nAfter=graphical-session.target\n\n[Service]\nExecStart={} --config-dir {} --log-file {} run --service\nRestart=on-failure\nRestartSec=10\n\n[Install]\nWantedBy=default.target\n",
-        q(exe),
+        "[Unit]\nDescription=carson remote desktop agent\nAfter=graphical-session.target\n\n[Service]\nExecStart={} --config-dir {} --log-file {} {}\nRestart=on-failure\nRestartSec=10\n\n[Install]\nWantedBy=default.target\n",
+        q(&launch.exe),
         q(config_dir),
         q(&log_path(config_dir)),
+        launch.args.join(" "),
     )
 }
 
+/// Whether the login item is installed (any state).
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
+pub fn is_installed() -> bool {
+    status().starts_with("installed")
+}
+
 pub fn install(config_dir: &Path) -> Result<()> {
-    let exe = exe()?;
+    let launch = launch()?;
     #[cfg(target_os = "macos")]
     {
         let path = plist_path()?;
@@ -108,7 +150,7 @@ pub fn install(config_dir: &Path) -> Result<()> {
         let _ = Command::new("launchctl")
             .args(["bootout", &format!("gui/{uid}/{LABEL}")])
             .output();
-        std::fs::write(&path, launch_agent_plist(&exe, config_dir))?;
+        std::fs::write(&path, launch_agent_plist(&launch, config_dir))?;
         run(Command::new("launchctl")
             .args(["bootstrap", &format!("gui/{uid}")])
             .arg(&path))?;
@@ -121,10 +163,11 @@ pub fn install(config_dir: &Path) -> Result<()> {
     #[cfg(target_os = "windows")]
     {
         let tr = format!(
-            "\"{}\" --config-dir \"{}\" --log-file \"{}\" run --service",
-            exe.display(),
+            "\"{}\" --config-dir \"{}\" --log-file \"{}\" {}",
+            launch.exe.display(),
             config_dir.display(),
-            log_path(config_dir).display()
+            log_path(config_dir).display(),
+            launch.args.join(" ")
         );
         run(Command::new("schtasks").args([
             "/Create",
@@ -151,7 +194,7 @@ pub fn install(config_dir: &Path) -> Result<()> {
             .join("systemd/user");
         std::fs::create_dir_all(&unit_dir)?;
         let unit = unit_dir.join("carson-agent.service");
-        std::fs::write(&unit, systemd_unit(&exe, config_dir))?;
+        std::fs::write(&unit, systemd_unit(&launch, config_dir))?;
         run(Command::new("systemctl").args(["--user", "daemon-reload"]))?;
         run(Command::new("systemctl").args(["--user", "enable", "--now", "carson-agent"]))?;
         println!(
@@ -282,7 +325,10 @@ mod tests {
     #[test]
     fn launch_agent_runs_service_mode_with_escaped_paths() {
         let p = launch_agent_plist(
-            Path::new("/Applications/Carson & Co/carson-agent"),
+            &Launch {
+                exe: "/Applications/Carson & Co/carson-agent".into(),
+                args: vec!["run".into(), "--service".into()],
+            },
             Path::new("/Users/a/Library/Application Support/carson"),
         );
         assert!(p.contains("<string>/Applications/Carson &amp; Co/carson-agent</string>"));
@@ -300,12 +346,28 @@ mod tests {
     #[test]
     fn systemd_unit_quotes_paths() {
         let u = systemd_unit(
-            Path::new("/opt/my apps/carson-agent"),
+            &Launch {
+                exe: "/opt/my apps/carson-agent".into(),
+                args: vec!["run".into(), "--service".into()],
+            },
             Path::new("/home/a/.config/carson"),
         );
         assert!(u.contains(
             "ExecStart=\"/opt/my apps/carson-agent\" --config-dir \"/home/a/.config/carson\""
         ));
         assert!(u.contains("Restart=on-failure"));
+        assert!(u.contains("carson.log run --service") || u.contains("agent.log\" run --service"));
+    }
+
+    #[test]
+    fn launch_agent_can_start_the_tray_app() {
+        let p = launch_agent_plist(
+            &Launch {
+                exe: "/Applications/carson.app/Contents/MacOS/carson".into(),
+                args: vec!["app".into()],
+            },
+            Path::new("/Users/a/Library/Application Support/carson"),
+        );
+        assert!(p.contains("agent.log</string>\n    <string>app</string>\n  </array>"));
     }
 }

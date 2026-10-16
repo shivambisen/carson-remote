@@ -71,7 +71,9 @@ impl Agent {
         let mut backoff = Backoff::new(Duration::from_millis(500), Duration::from_secs(10));
         loop {
             let started = Instant::now();
-            match self.connect_once().await {
+            let ended = self.connect_once().await;
+            crate::status::set_online(false);
+            match ended {
                 Ended::Fatal(e) => return Err(e),
                 Ended::Transient(e) => {
                     if started.elapsed() >= STABLE_AFTER {
@@ -194,6 +196,7 @@ impl Agent {
             Some(MessageType::HelloOk) => match serde_json::from_value::<AgentHelloOk>(env.body) {
                 Ok(ok) => {
                     tracing::info!(device_id = %ok.device_id, heartbeat_s = ok.heartbeat_interval_s, "online");
+                    crate::status::set_online(true);
                     self.sessions
                         .lock()
                         .unwrap_or_else(|e| e.into_inner())

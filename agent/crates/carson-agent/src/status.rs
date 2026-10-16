@@ -7,11 +7,28 @@ use std::sync::LazyLock;
 use tokio::sync::watch;
 
 static LIVE: LazyLock<watch::Sender<Option<String>>> = LazyLock::new(|| watch::channel(None).0);
+static ONLINE: LazyLock<watch::Sender<bool>> = LazyLock::new(|| watch::channel(false).0);
+
+/// Whether the agent is connected to the server (reachable from the website).
+pub fn set_online(online: bool) {
+    ONLINE.send_replace(online);
+}
+
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
+pub fn online() -> bool {
+    *ONLINE.borrow()
+}
 
 /// Subscribes to the label of the live session ("ana@x.com is controlling this computer").
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn subscribe() -> watch::Receiver<Option<String>> {
     LIVE.subscribe()
+}
+
+/// The live session's label right now, if any.
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
+pub fn live() -> Option<String> {
+    LIVE.borrow().clone()
 }
 
 /// Marks a session live until dropped.

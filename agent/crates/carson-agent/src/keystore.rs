@@ -1,7 +1,13 @@
 //! Storage for the device's Ed25519 private key (a 32-byte seed).
 //!
-//! macOS: Keychain. Windows: Credential Manager. Linux: a 0600 file next to the agent
-//! config (Secret Service needs a desktop session; revisit when packaging in M8).
+//! Windows: Credential Manager. macOS and Linux: a 0600 file next to the agent config.
+//!
+//! macOS used the Keychain until 0.1.0-rc3, but Keychain access is tied to the app's code
+//! signature: free (ad-hoc signed) builds get a new identity with every update, and the tray
+//! app and the CLI are different programs, so macOS kept asking "carson wants to use your
+//! confidential information". A user-only file gives the same protection against other users;
+//! code already running as this user can control the computer anyway. Keys stored in the
+//! Keychain by older versions are moved to the file on first use (one last prompt).
 
 use anyhow::Result;
 
@@ -21,6 +27,7 @@ fn to_seed(bytes: &[u8]) -> Result<Seed> {
 
 /// OS keychain entry, keyed per server so one machine can pair with several servers.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub struct OsKeychain {
     account: String,
 }
@@ -104,6 +111,36 @@ impl KeyStore for FileStore {
     }
 }
 
+/// macOS: the file store, falling back once to a key an older version kept in the Keychain.
+#[cfg(target_os = "macos")]
+struct MigratingStore {
+    file: FileStore,
+    legacy: OsKeychain,
+}
+
+#[cfg(target_os = "macos")]
+impl KeyStore for MigratingStore {
+    fn load(&self) -> Result<Option<Seed>> {
+        if let Some(seed) = self.file.load()? {
+            return Ok(Some(seed));
+        }
+        let Some(seed) = self.legacy.load()? else {
+            return Ok(None);
+        };
+        self.file.save(&seed)?;
+        let _ = self.legacy.delete();
+        tracing::info!("moved the device key from the Keychain to the carson settings folder");
+        Ok(Some(seed))
+    }
+    fn save(&self, seed: &Seed) -> Result<()> {
+        self.file.save(seed)
+    }
+    fn delete(&self) -> Result<()> {
+        // A Keychain copy only exists for devices paired before the move and never migrated.
+        self.file.delete()
+    }
+}
+
 /// The platform's default key store for a given server.
 /// `CARSON_AGENT_KEYSTORE=file` forces the file store (headless CI, end-to-end tests).
 pub fn default_store(
@@ -114,7 +151,14 @@ pub fn default_store(
     if std::env::var("CARSON_AGENT_KEYSTORE").as_deref() == Ok("file") {
         return Ok(file());
     }
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        Ok(Box::new(MigratingStore {
+            file: FileStore::new(config_dir.join("device.key")),
+            legacy: OsKeychain::new(server_origin)?,
+        }))
+    }
+    #[cfg(target_os = "windows")]
     {
         Ok(Box::new(OsKeychain::new(server_origin)?))
     }
