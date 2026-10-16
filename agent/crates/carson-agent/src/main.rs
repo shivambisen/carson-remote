@@ -16,6 +16,7 @@ mod media;
 mod peer;
 mod service;
 mod sessions;
+mod signin;
 mod status;
 mod ui;
 
@@ -358,22 +359,41 @@ async fn pair(dir: PathBuf, server: &str, name: Option<String>, open_browser: bo
     let start = api
         .pair_start(&key, &name, carson_proto::current_os())
         .await?;
-    let link = format!("{}?code={}", start.verification_url, start.user_code);
-    println!("To pair \"{name}\", sign in and open:\n\n    {link}\n");
+    // Browser sign-in (no code): the page hands a one-time grant back to this loopback port.
+    let loopback = signin::Loopback::bind().await?;
+    let link = loopback.url(&server, &start.pairing_id);
+    println!("To add \"{name}\" to your carson account, sign in at:\n\n    {link}\n");
     if open_browser && service::open_browser(&link) {
         println!("(opened in your browser)");
     }
-    println!("code: {}", start.user_code);
     println!(
-        "\nThe code expires in {} minutes. Waiting for approval…",
-        start.expires_in / 60
+        "Waiting for you to sign in (expires in {} minutes)…\nNo browser on this computer? Sign in elsewhere, choose \"Add with a code\" and enter {}.",
+        start.expires_in / 60,
+        start.user_code
     );
+    let done_url = format!("{server}/#/connected?name={}", url_escape(&name));
+    let signed_in = loopback.grant(&done_url);
+    tokio::pin!(signed_in);
 
     let deadline = Instant::now() + Duration::from_secs(start.expires_in);
     let interval = Duration::from_secs(start.interval.max(1));
     while Instant::now() < deadline {
-        tokio::time::sleep(interval).await;
-        match api.pair_poll(&start.pairing_id).await {
+        let outcome = tokio::select! {
+            grant = &mut signed_in => match grant {
+                Ok(grant) => match api.pair_complete(&start.pairing_id, &grant).await {
+                    Ok(device_id) => Ok(PollStatus::Approved { device_id }),
+                    Err(e) => {
+                        // Rebind and keep waiting; the code path still works meanwhile.
+                        tracing::warn!(error = %format!("{e:#}"), "browser sign-in failed");
+                        signed_in.set(loopback.grant(&done_url));
+                        Ok(PollStatus::Pending)
+                    }
+                },
+                Err(e) => Err(e),
+            },
+            () = tokio::time::sleep(interval) => api.pair_poll(&start.pairing_id).await,
+        };
+        match outcome {
             Ok(PollStatus::Pending) => {}
             Ok(PollStatus::Approved { device_id }) => {
                 config::save(
@@ -381,14 +401,14 @@ async fn pair(dir: PathBuf, server: &str, name: Option<String>, open_browser: bo
                     &AgentConfig {
                         server_url: server,
                         device_id: device_id.clone(),
-                        name,
+                        name: name.clone(),
                         unattended: false,
                         pin_hash: None,
                         ask_before_connect: false,
                         show_indicator: false,
                     },
                 )?;
-                println!("Paired as {device_id}. Start the agent with: carson-agent run");
+                println!("Added \"{name}\" to your account ({device_id}).");
                 return Ok(());
             }
             Ok(PollStatus::Expired) => break,
@@ -396,7 +416,12 @@ async fn pair(dir: PathBuf, server: &str, name: Option<String>, open_browser: bo
         }
     }
     let _ = store.delete();
-    bail!("pairing code expired; run `carson-agent pair` again")
+    bail!("sign-in expired; run `carson-agent setup` again")
+}
+
+/// Percent-encodes a query value.
+fn url_escape(s: &str) -> String {
+    url::form_urlencoded::byte_serialize(s.as_bytes()).collect()
 }
 
 fn load_paired(dir: &std::path::Path) -> Result<(AgentConfig, DeviceKey)> {

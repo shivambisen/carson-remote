@@ -431,3 +431,66 @@ func TestDeviceListIncludesPublicKey(t *testing.T) {
 		t.Fatalf("devices = %+v", out.Devices)
 	}
 }
+
+func TestBrowserSignInPairing(t *testing.T) {
+	e := newEnv(t)
+	ana := e.user(t, "ana@x.com")
+	pub, priv, _ := ed25519.GenerateKey(nil)
+	s := e.startPairing(t, pub)
+
+	// The grant endpoint needs a signed-in browser.
+	if code, _ := e.call(t, nil, "/v1/pair/grant", map[string]string{"pairing_id": s.PairingID}, nil); code != http.StatusUnauthorized {
+		t.Fatalf("grant without sign-in = %d", code)
+	}
+	var g struct{ Grant, Name, OS string }
+	if code, body := e.call(t, ana, "/v1/pair/grant", map[string]string{"pairing_id": s.PairingID}, &g); code != http.StatusOK || g.Grant == "" || g.Name != "Ana's MacBook" {
+		t.Fatalf("grant = %d %s", code, body)
+	}
+
+	// Issuing a grant approves nothing by itself.
+	var poll struct {
+		Status   string `json:"status"`
+		DeviceID string `json:"device_id"`
+	}
+	e.call(t, nil, "/v1/pair/poll", map[string]string{"pairing_id": s.PairingID}, &poll)
+	if poll.Status != "pending" {
+		t.Fatalf("poll after grant = %+v", poll)
+	}
+
+	// A grant only completes its own pairing, and a wrong attempt burns it.
+	other := e.startPairing(t, func() ed25519.PublicKey { p, _, _ := ed25519.GenerateKey(nil); return p }())
+	if code, _ := e.call(t, nil, "/v1/pair/complete", map[string]string{"pairing_id": other.PairingID, "grant": g.Grant}, nil); code != http.StatusForbidden {
+		t.Fatalf("complete other pairing = %d", code)
+	}
+	if code, _ := e.call(t, nil, "/v1/pair/complete", map[string]string{"pairing_id": s.PairingID, "grant": g.Grant}, nil); code != http.StatusForbidden {
+		t.Fatalf("reuse burned grant = %d", code)
+	}
+
+	e.call(t, ana, "/v1/pair/grant", map[string]string{"pairing_id": s.PairingID}, &g)
+	var done struct{ Status, DeviceID string }
+	if code, body := e.call(t, nil, "/v1/pair/complete", map[string]string{"pairing_id": s.PairingID, "grant": g.Grant}, &done); code != http.StatusOK || done.Status != "approved" {
+		t.Fatalf("complete = %d %s", code, body)
+	}
+	e.call(t, nil, "/v1/pair/poll", map[string]string{"pairing_id": s.PairingID}, &poll)
+	if poll.Status != "approved" || poll.DeviceID == "" {
+		t.Fatalf("poll after complete = %+v", poll)
+	}
+	if code, _ := e.token(t, priv, poll.DeviceID); code != http.StatusOK {
+		t.Fatalf("device token after browser pairing = %d", code)
+	}
+	// Single use, and the pairing is no longer pending.
+	if code, _ := e.call(t, nil, "/v1/pair/complete", map[string]string{"pairing_id": s.PairingID, "grant": g.Grant}, nil); code != http.StatusForbidden {
+		t.Fatalf("grant reuse = %d", code)
+	}
+	if code, _ := e.call(t, ana, "/v1/pair/grant", map[string]string{"pairing_id": s.PairingID}, nil); code != http.StatusNotFound {
+		t.Fatalf("grant for completed pairing = %d", code)
+	}
+
+	// Grants expire.
+	s2 := e.startPairing(t, func() ed25519.PublicKey { p, _, _ := ed25519.GenerateKey(nil); return p }())
+	e.call(t, ana, "/v1/pair/grant", map[string]string{"pairing_id": s2.PairingID}, &g)
+	e.clock.Advance(GrantTTL + time.Second)
+	if code, _ := e.call(t, nil, "/v1/pair/complete", map[string]string{"pairing_id": s2.PairingID, "grant": g.Grant}, nil); code != http.StatusForbidden {
+		t.Fatalf("expired grant = %d", code)
+	}
+}

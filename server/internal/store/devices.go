@@ -121,9 +121,20 @@ func (s *Store) GetPairing(ctx context.Context, id string, now time.Time) (Pairi
 
 // ApprovePairing binds a pending pairing to userID and creates the device, atomically.
 func (s *Store) ApprovePairing(ctx context.Context, codeHash []byte, userID string, now time.Time) (Device, error) {
+	return s.approvePairing(ctx, "code_hash", codeHash, userID, now)
+}
+
+// ApprovePairingByID is ApprovePairing for the browser sign-in flow, which identifies the
+// pairing by ID (proven by a one-time grant) instead of by the typed code.
+func (s *Store) ApprovePairingByID(ctx context.Context, pairingID, userID string, now time.Time) (Device, error) {
+	return s.approvePairing(ctx, "id", pairingID, userID, now)
+}
+
+func (s *Store) approvePairing(ctx context.Context, column string, key any, userID string, now time.Time) (Device, error) {
 	var d Device
 	err := s.tx(ctx, func(tx *sql.Tx) error {
-		p, err := scanPairing(tx.QueryRowContext(ctx, `SELECT `+pairingCols+` FROM pairings WHERE code_hash = ? AND status = 'pending' AND expires_at > ?`, codeHash, ms(now)))
+		// column is one of two constants above, never user input.
+		p, err := scanPairing(tx.QueryRowContext(ctx, `SELECT `+pairingCols+` FROM pairings WHERE `+column+` = ? AND status = 'pending' AND expires_at > ?`, key, ms(now)))
 		if err != nil {
 			return err
 		}

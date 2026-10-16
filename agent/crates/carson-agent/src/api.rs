@@ -42,7 +42,6 @@ impl std::error::Error for ApiError {}
 pub struct PairStart {
     pub pairing_id: String,
     pub user_code: String,
-    pub verification_url: String,
     pub expires_in: u64,
     pub interval: u64,
 }
@@ -112,6 +111,21 @@ impl Api {
             json!({"public_key": key.public_key_b64(), "name": name, "os": os}),
         )
         .await
+    }
+
+    /// Finishes a browser sign-in with the grant the browser handed to our loopback listener.
+    pub async fn pair_complete(&self, pairing_id: &str, grant: &str) -> Result<String> {
+        #[derive(Deserialize)]
+        struct Resp {
+            device_id: String,
+        }
+        let r: Resp = self
+            .post(
+                "/v1/pair/complete",
+                json!({"pairing_id": pairing_id, "grant": grant}),
+            )
+            .await?;
+        Ok(r.device_id)
     }
 
     pub async fn pair_poll(&self, pairing_id: &str) -> Result<PollStatus> {

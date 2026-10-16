@@ -7,6 +7,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -69,7 +70,23 @@ type Service struct {
 
 	mu         sync.Mutex
 	challenges map[string]challenge // nonce → challenge
+	grants     map[string]grant     // hex(hash(grant)) → grant
 }
+
+// grant lets the agent that started a pairing finish it for the user who signed in in the
+// browser. It is handed to the browser, which passes it to the agent over the agent's own
+// loopback address (127.0.0.1), so only the computer that opened the browser can redeem it.
+type grant struct {
+	pairingID string
+	userID    string
+	ip, ua    string
+	expires   time.Time
+}
+
+// GrantTTL bounds how long the browser → agent hand-off may take.
+const GrantTTL = 2 * time.Minute
+
+const maxGrants = 10000
 
 type challenge struct {
 	deviceID string
@@ -81,6 +98,9 @@ func (s *Service) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/pair/poll", s.handlePairPoll)
 	mux.Handle("POST /v1/pair/lookup", s.Auth.RequireUser(http.HandlerFunc(s.handlePairLookup)))
 	mux.Handle("POST /v1/pair/approve", s.Auth.RequireUser(http.HandlerFunc(s.handlePairApprove)))
+	// Browser sign-in (no code): see handlePairGrant.
+	mux.Handle("POST /v1/pair/grant", s.Auth.RequireUser(http.HandlerFunc(s.handlePairGrant)))
+	mux.HandleFunc("POST /v1/pair/complete", s.handlePairComplete)
 	mux.HandleFunc("POST /v1/device/challenge", s.handleChallenge)
 	mux.HandleFunc("POST /v1/device/token", s.handleToken)
 	mux.Handle("GET /v1/devices", s.Auth.RequireUser(http.HandlerFunc(s.handleList)))
@@ -269,6 +289,95 @@ func (s *Service) handlePairApprove(w http.ResponseWriter, r *http.Request) {
 		s.Log.Info("device paired", "user_id", u.ID, "device_id", d.ID, "os", d.OS)
 		s.Audit.Record(store.AuditEvent{UserID: u.ID, DeviceID: d.ID, Action: store.AuditDevicePaired, IP: s.ip(r), UserAgent: r.UserAgent(), Detail: d.Name})
 		httpx.WriteJSON(w, http.StatusOK, d)
+	}
+}
+
+// handlePairGrant is called by the signed-in browser page that the agent opened. It does not
+// approve anything by itself: it returns a one-time grant that the page forwards to the agent
+// on 127.0.0.1, and only the agent presenting it (handlePairComplete) creates the device.
+// A link to someone else's pairing is therefore useless: the grant would go to the victim's
+// own loopback, where no agent is waiting for it.
+func (s *Service) handlePairGrant(w http.ResponseWriter, r *http.Request) {
+	u, _ := auth.UserFrom(r.Context())
+	if !s.Limits.PairCode.Allow("user:"+u.ID) || !s.Limits.PairCode.Allow("ip:"+s.ip(r)) {
+		tooMany(w)
+		return
+	}
+	var body struct {
+		PairingID string `json:"pairing_id"`
+	}
+	if err := httpx.DecodeJSON(w, r, &body); err != nil || body.PairingID == "" {
+		httpx.WriteError(w, http.StatusBadRequest, "bad_request", "pairing_id required")
+		return
+	}
+	now := s.Now()
+	p, err := s.Store.GetPairing(r.Context(), body.PairingID, now)
+	if errors.Is(err, store.ErrNotFound) || (err == nil && p.Status != "pending") {
+		httpx.WriteError(w, http.StatusNotFound, "invalid_pairing", "this sign-in link expired; start again from the app")
+		return
+	}
+	if err != nil {
+		s.internal(w, "get pairing", err)
+		return
+	}
+	token, hash := store.NewToken()
+	s.mu.Lock()
+	if s.grants == nil {
+		s.grants = map[string]grant{}
+	}
+	for k, g := range s.grants {
+		if now.After(g.expires) {
+			delete(s.grants, k)
+		}
+	}
+	full := len(s.grants) >= maxGrants
+	if !full {
+		s.grants[hex.EncodeToString(hash)] = grant{pairingID: p.ID, userID: u.ID, ip: s.ip(r), ua: r.UserAgent(), expires: now.Add(GrantTTL)}
+	}
+	s.mu.Unlock()
+	if full {
+		tooMany(w)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"grant": token, "name": p.Name, "os": p.OS})
+}
+
+// handlePairComplete is called by the agent with the grant it received on its loopback.
+func (s *Service) handlePairComplete(w http.ResponseWriter, r *http.Request) {
+	if !s.Limits.PairPoll.Allow(s.ip(r)) {
+		tooMany(w)
+		return
+	}
+	var body struct {
+		PairingID string `json:"pairing_id"`
+		Grant     string `json:"grant"`
+	}
+	if err := httpx.DecodeJSON(w, r, &body); err != nil || body.PairingID == "" || body.Grant == "" {
+		httpx.WriteError(w, http.StatusBadRequest, "bad_request", "pairing_id and grant required")
+		return
+	}
+	key := hex.EncodeToString(store.HashToken(body.Grant))
+	now := s.Now()
+	s.mu.Lock()
+	g, ok := s.grants[key]
+	delete(s.grants, key) // single use, even on failure
+	s.mu.Unlock()
+	if !ok || now.After(g.expires) || g.pairingID != body.PairingID {
+		httpx.WriteError(w, http.StatusForbidden, "invalid_grant", "sign-in expired or invalid; start again")
+		return
+	}
+	d, err := s.Store.ApprovePairingByID(r.Context(), g.pairingID, g.userID, now)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		httpx.WriteError(w, http.StatusNotFound, "expired_token", "pairing expired or already completed; start again")
+	case errors.Is(err, store.ErrConflict):
+		httpx.WriteError(w, http.StatusConflict, "already_paired", "this device is already paired; unpair it first")
+	case err != nil:
+		s.internal(w, "approve pairing", err)
+	default:
+		s.Log.Info("device paired", "user_id", g.userID, "device_id", d.ID, "os", d.OS, "via", "browser")
+		s.Audit.Record(store.AuditEvent{UserID: g.userID, DeviceID: d.ID, Action: store.AuditDevicePaired, IP: g.ip, UserAgent: g.ua, Detail: d.Name})
+		httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "approved", "device_id": d.ID})
 	}
 }
 
