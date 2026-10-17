@@ -81,14 +81,19 @@ enum Look {
 /// Runs the app. `background`: start with the window hidden (login item).
 pub fn run(dir: PathBuf, server: Option<String>, background: bool) -> Result<()> {
     // One copy only: if one is running, ask it to show its window and stop.
-    let listener = match TcpListener::bind(("127.0.0.1", INSTANCE_PORT)) {
+    // (GLENLEY_INSTANCE_PORT: tests that run beside an installed copy.)
+    let port = std::env::var("GLENLEY_INSTANCE_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(INSTANCE_PORT);
+    let listener = match TcpListener::bind(("127.0.0.1", port)) {
         Ok(l) => l,
         Err(_) => {
-            if let Ok(mut s) = TcpStream::connect(("127.0.0.1", INSTANCE_PORT)) {
+            if let Ok(mut s) = TcpStream::connect(("127.0.0.1", port)) {
                 let _ = s.write_all(b"show\n");
                 return Ok(());
             }
-            anyhow::bail!("port {INSTANCE_PORT} is in use by another program");
+            anyhow::bail!("port {port} is in use by another program");
         }
     };
 
@@ -237,7 +242,7 @@ async fn controller(
         if cfg.is_some() {
             note(Note::Problem(None));
             tokio::select! {
-                r = crate::run(dir.clone(), crate::media::MediaOptions::default()) => {
+                r = crate::run(dir.clone(), app_media()) => {
                     let err = r.err();
                     let removed = err.as_ref().is_some_and(|e| {
                         matches!(e.downcast_ref::<crate::api::ApiError>(), Some(crate::api::ApiError::DeviceRejected))
@@ -316,6 +321,17 @@ async fn controller(
             return;
         }
     }
+}
+
+/// What the app shares: the screen with real input. `GLENLEY_TEST_MEDIA=1` (tests only) uses
+/// the synthetic test pattern and logs input instead of injecting it.
+fn app_media() -> crate::media::MediaOptions {
+    let mut m = crate::media::MediaOptions::default();
+    if std::env::var_os("GLENLEY_TEST_MEDIA").is_some() {
+        m.source = crate::media::Source::TestPattern;
+        m.input = crate::media::InputMode::Log;
+    }
+    m
 }
 
 fn sign_out(dir: &Path) {

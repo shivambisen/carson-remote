@@ -177,6 +177,15 @@ export class ViewerSession {
   }
 
   /** The underlying peer connection, for stats. */
+  /** Data-path health, for diagnostics: SCTP association and each data channel's state. */
+  channelStates(): { sctp: string; ctl: string; ptr: string } {
+    return {
+      sctp: this.pc?.sctp?.state ?? "none",
+      ctl: this.ctl?.readyState ?? "not-announced",
+      ptr: this.ptr?.readyState ?? "not-announced",
+    };
+  }
+
   get peer(): RTCPeerConnection | null {
     return this.pc;
   }

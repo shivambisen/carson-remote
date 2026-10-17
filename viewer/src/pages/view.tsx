@@ -94,6 +94,7 @@ function RemoteScreen({ device, options }: { device: Device; options: SessionOpt
   const [pinValue, setPinValue] = useState("");
   const [inputAvailable, setInputAvailable] = useState(false);
   const [inputMessage, setInputMessage] = useState("");
+  const [channels, setChannels] = useState({ sctp: "none", ctl: "not-announced", ptr: "not-announced" });
   const [control, setControl] = useState(true);
   const [statsOn, setStatsOn] = useState(false);
   const [statsText, setStatsText] = useState("");
@@ -267,6 +268,8 @@ function RemoteScreen({ device, options }: { device: Device; options: SessionOpt
 
     let prev: StatsSample | null = null;
     const timer = setInterval(() => {
+      const ch = session.channelStates();
+      setChannels((old) => (old.sctp === ch.sctp && old.ctl === ch.ctl && old.ptr === ch.ptr ? old : ch));
       const pc = session.peer;
       if (!pc || !statsOnRef.current) return;
       void pc.getStats().then((report) => {
@@ -278,6 +281,7 @@ function RemoteScreen({ device, options }: { device: Device; options: SessionOpt
             `RTT ${st.rttMs ?? "–"} ms · jitter buf ${st.jitterBufferMs ?? "–"} ms\n` +
             `decode ${st.decodeMs ?? "–"} ms · lost ${st.packetsLost}\n` +
             `path ${st.path} (${st.candidateType})\n` +
+            `data sctp ${session.channelStates().sctp} · ctl ${session.channelStates().ctl} · ptr ${session.channelStates().ptr}\n` +
             (encoderLine ? `${encoderLine}\n` : "") +
             (latency.count > 0 ? `glass-to-glass p50 ${Math.round(latency.percentile(50) ?? 0)} ms · p95 ${Math.round(latency.percentile(95) ?? 0)} ms (${latency.count})\n` : "") +
             `input ${controlling() ? "on" : "off"}`,
@@ -382,7 +386,9 @@ function RemoteScreen({ device, options }: { device: Device; options: SessionOpt
                 ? "Available once the connection is live"
                 : inputMessage
                   ? `View only: ${inputMessage}`
-                  : "Waiting for the other computer…"}
+                  : channels.ctl !== "open"
+                    ? `Control link not open (sctp ${channels.sctp}, ctl ${channels.ctl}, ptr ${channels.ptr})`
+                    : "Waiting for the other computer…"}
           </TooltipContent>
         </Tooltip>
         <Tooltip>
