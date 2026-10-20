@@ -76,6 +76,9 @@ export function ViewPage({ deviceId, forceRelay }: { deviceId: string; forceRela
   );
 }
 
+/** How long the video may be live without the control channel before we switch to the relay. */
+const DATA_CHANNEL_GRACE_MS = 6000;
+
 type Status = { kind: "connecting" | "reconnecting"; detail: string } | { kind: "live" } | { kind: "ended"; message: string };
 
 function RemoteScreen({ device, options }: { device: Device; options: SessionOptions }) {
@@ -109,6 +112,11 @@ function RemoteScreen({ device, options }: { device: Device; options: SessionOpt
     const controlling = () => inputAvailableRef.current && controlRef.current;
     let encoderLine = "";
     let pendingClipboard: string | null = null;
+    // Some networks (campus, office firewalls that block VPN-like traffic) let video through but
+    // drop the data channels that carry mouse, keyboard and status. When that happens, switch to
+    // the TURN relay, which looks like ordinary HTTPS on port 443.
+    let liveSince: number | null = null;
+    let relayHandled = false;
 
     // Glass-to-glass latency from the test pattern's timestamp barcode (no-op on real screens).
     const latency = new LatencyMeter();
@@ -143,6 +151,7 @@ function RemoteScreen({ device, options }: { device: Device; options: SessionOpt
         onState: (s) => {
           if (s.kind === "connecting" || s.kind === "reconnecting") setStatus({ kind: s.kind, detail: s.detail });
           else if (s.kind === "live") {
+            if (liveSince === null) liveSince = performance.now();
             setStatus({ kind: "live" });
             stage.focus();
           } else {
@@ -270,6 +279,17 @@ function RemoteScreen({ device, options }: { device: Device; options: SessionOpt
     const timer = setInterval(() => {
       const ch = session.channelStates();
       setChannels((old) => (old.sctp === ch.sctp && old.ctl === ch.ctl && old.ptr === ch.ptr ? old : ch));
+      if (!relayHandled && liveSince !== null && ch.ctl !== "open" && performance.now() - liveSince > DATA_CHANNEL_GRACE_MS) {
+        relayHandled = true;
+        if (options.forceRelay) {
+          toast.error("Remote control is blocked even through the relay on this network.");
+        } else if (session.hasRelay()) {
+          toast("This network blocks remote control on the direct path. Switching to the relay…");
+          navigate(`#/view/${encodeURIComponent(device.id)}?relay=1`);
+        } else {
+          toast.warning("This network blocks remote control (view only). The server needs a relay for networks like this.");
+        }
+      }
       const pc = session.peer;
       if (!pc || !statsOnRef.current) return;
       void pc.getStats().then((report) => {

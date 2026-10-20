@@ -270,7 +270,15 @@ export class ViewerSession {
     }
   }
 
+  private relayAvailable = false;
+
+  /** Whether the server offered a TURN relay for this session. */
+  hasRelay(): boolean {
+    return this.relayAvailable;
+  }
+
   private createPeer(iceServers: IceServer[]): void {
+    this.relayAvailable = iceServers.some((s) => (Array.isArray(s.urls) ? s.urls : [s.urls]).some((u) => /^turns?:/.test(u)));
     const pc = new RTCPeerConnection({ iceServers, iceTransportPolicy: this.options.forceRelay ? "relay" : "all" });
     this.pc = pc;
     pc.onicecandidate = (ev) => {

@@ -69,7 +69,8 @@ function Routes() {
 
   switch (route.page) {
     case "view":
-      return <ViewPage key={route.deviceId} deviceId={route.deviceId} forceRelay={route.params.get("relay") === "1"} />;
+      // Keyed on the relay flag too: switching to the relay starts a fresh session.
+      return <ViewPage key={`${route.deviceId}:${route.params.get("relay") ?? ""}`} deviceId={route.deviceId} forceRelay={route.params.get("relay") === "1"} />;
     case "connect":
       return <ConnectPage params={route.params} />;
     case "connected":
