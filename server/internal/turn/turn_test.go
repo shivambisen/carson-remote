@@ -35,3 +35,29 @@ func TestICEServers(t *testing.T) {
 		t.Fatalf("TURN without a secret must be omitted, got %+v", s)
 	}
 }
+
+func TestICEServersWithAStaticRelay(t *testing.T) {
+	i := &Issuer{
+		StaticTURNURLs: []string{"turn:relay.example:80", "turns:relay.example:443?transport=tcp"},
+		StaticUsername: "user1", StaticCredential: "cred1",
+	}
+	got := i.ICEServers("ses_1")
+	if len(got) != 1 {
+		t.Fatalf("want one entry, got %+v", got)
+	}
+	if got[0].Username != "user1" || got[0].Credential != "cred1" || len(got[0].URLs) != 2 {
+		t.Fatalf("static entry: %+v", got[0])
+	}
+
+	// Every part is required: a username or credential without URLs, or a URL without both
+	// credentials, is simply omitted rather than sent half-configured.
+	for _, i := range []*Issuer{
+		{StaticUsername: "u", StaticCredential: "c"},
+		{StaticTURNURLs: []string{"turn:x"}, StaticCredential: "c"},
+		{StaticTURNURLs: []string{"turn:x"}, StaticUsername: "u"},
+	} {
+		if s := i.ICEServers("ses"); len(s) != 0 {
+			t.Fatalf("incomplete static config must be omitted, got %+v", s)
+		}
+	}
+}

@@ -3,8 +3,10 @@
 # (sync: false); everything else is set here. Data lives in PostgreSQL (e.g. Neon), since free
 # Render services have no persistent disk.
 #
-# Relay: Render can't run one (it only exposes HTTP(S)), so set the Cloudflare TURN key below;
-# without it, direct connections (most home and mobile networks) still work.
+# Relay: Render can't run one (it only exposes HTTP(S)), so set the Cloudflare TURN key below,
+# or CARSON_TURN_STATIC_* for a provider with a free no-card tier (e.g. Metered); without either,
+# direct connections (most home and mobile networks) still work, but strict ones (campus, office)
+# won't be able to control the shared screen.
 services:
   - type: web
     name: carson
@@ -47,4 +49,13 @@ services:
       - key: CARSON_CLOUDFLARE_TURN_KEY_ID
         sync: false
       - key: CARSON_CLOUDFLARE_TURN_TOKEN
+        sync: false
+      # Same purpose, alternative provider: one free TURN relay with a single fixed
+      # username/credential (e.g. Metered's "Open Relay" - metered.ca, no card required).
+      # Leave unset if using Cloudflare above; set this instead if not.
+      - key: CARSON_TURN_STATIC_URLS
+        sync: false
+      - key: CARSON_TURN_STATIC_USERNAME
+        sync: false
+      - key: CARSON_TURN_STATIC_CREDENTIAL
         sync: false

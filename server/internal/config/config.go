@@ -17,7 +17,7 @@ type Config struct {
 	PublicURL *url.URL
 	// AltPublicURLs are other https addresses of this server, for networks that block PublicURL's domain.
 	AltPublicURLs []*url.URL
-	DBPath    string
+	DBPath        string
 	// DatabaseURL, if set (postgres://…), is used instead of the SQLite file at DBPath.
 	DatabaseURL string
 	LogLevel    slog.Level
@@ -48,6 +48,11 @@ type Config struct {
 
 	// Cloudflare TURN (relay through strict firewalls): a TURN key ID and its API token.
 	CloudflareTURNKeyID, CloudflareTURNToken string
+
+	// A relay with one fixed username/credential pair for every session, instead of (or besides)
+	// Cloudflare: e.g. a provider's free tier such as Metered's "Open Relay".
+	TURNStaticURLs                           []string
+	TURNStaticUsername, TURNStaticCredential string
 }
 
 // OAuthClient holds one identity provider's credentials. Empty ClientID disables it.
@@ -89,6 +94,10 @@ func Load(getenv func(string) string) (Config, error) {
 
 		CloudflareTURNKeyID: getenv("CARSON_CLOUDFLARE_TURN_KEY_ID"),
 		CloudflareTURNToken: getenv("CARSON_CLOUDFLARE_TURN_TOKEN"),
+
+		TURNStaticURLs:       splitList(getenv("CARSON_TURN_STATIC_URLS")),
+		TURNStaticUsername:   getenv("CARSON_TURN_STATIC_USERNAME"),
+		TURNStaticCredential: getenv("CARSON_TURN_STATIC_CREDENTIAL"),
 	}
 
 	parseBool := func(key string, dst *bool) {

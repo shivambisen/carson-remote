@@ -28,6 +28,11 @@ type Issuer struct {
 	Now      func() time.Time
 	// Cloudflare, if configured, provides the relay instead of (or besides) coturn.
 	Cloudflare *Cloudflare
+	// StaticTURNURLs, with StaticUsername and StaticCredential: a relay that hands out one fixed
+	// username/credential pair rather than minting one per session (e.g. a provider's free tier,
+	// such as Metered's "Open Relay"). Sent to every session, so treat it as shared, not secret.
+	StaticTURNURLs                   []string
+	StaticUsername, StaticCredential string
 	// OnError reports relay credential failures (the session continues without a relay).
 	OnError func(error)
 }
@@ -58,6 +63,11 @@ func (i *Issuer) ICEServers(label string) []protocol.ICEServer {
 		}
 		user, cred := Credentials(i.Secret, label, now().Add(ttl))
 		servers = append(servers, protocol.ICEServer{URLs: i.TURNURLs, Username: user, Credential: cred})
+	}
+	if len(i.StaticTURNURLs) > 0 && i.StaticUsername != "" && i.StaticCredential != "" {
+		servers = append(servers, protocol.ICEServer{
+			URLs: i.StaticTURNURLs, Username: i.StaticUsername, Credential: i.StaticCredential,
+		})
 	}
 	if i.Cloudflare.Enabled() {
 		ttl := i.TTL

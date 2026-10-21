@@ -96,8 +96,11 @@ func New(cfg config.Config, st *store.Store, log *slog.Logger) *Server {
 		PingInterval: 15 * time.Second, PingTimeout: 30 * time.Second,
 		ICE: &turn.Issuer{
 			Secret: cfg.TURNSecret, TURNURLs: cfg.TURNURLs, STUNURLs: cfg.STUNURLs, TTL: cfg.TURNTTL,
-			Cloudflare: &turn.Cloudflare{KeyID: cfg.CloudflareTURNKeyID, APIToken: cfg.CloudflareTURNToken},
-			OnError:    func(err error) { log.Error("relay credentials", "err", err) },
+			Cloudflare:       &turn.Cloudflare{KeyID: cfg.CloudflareTURNKeyID, APIToken: cfg.CloudflareTURNToken},
+			StaticTURNURLs:   cfg.TURNStaticURLs,
+			StaticUsername:   cfg.TURNStaticUsername,
+			StaticCredential: cfg.TURNStaticCredential,
+			OnError:          func(err error) { log.Error("relay credentials", "err", err) },
 		},
 		TrustProxy:     cfg.TrustProxy,
 		SessionLimiter: ratelimit.New(10, time.Minute, 5),
