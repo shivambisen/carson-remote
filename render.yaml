@@ -44,3 +44,24 @@ services:
         sync: false
       - key: CARSON_CLOUDFLARE_TURN_TOKEN
         sync: false
+
+  # Landing page (glenley.in). Served from Render's Cloudflare edge like app.glenley.in, because
+  # some campus and ISP networks cut off connections to Vercel-hosted custom domains.
+  - type: web
+    name: glenley-site
+    runtime: static
+    rootDir: site
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    autoDeploy: true
+    domains:
+      - glenley.in
+      - www.glenley.in
+    headers:
+      - path: /assets/*
+        name: Cache-Control
+        value: public, max-age=31536000, immutable
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
