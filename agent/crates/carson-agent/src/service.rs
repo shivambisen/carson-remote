@@ -47,14 +47,21 @@ pub struct Launch {
 /// the headless agent.
 fn launch() -> Result<Launch> {
     let exe = std::env::current_exe().context("locate glenley-agent executable")?;
-    let app_name = if cfg!(windows) {
-        "glenley.exe"
-    } else {
-        "glenley"
-    };
+    // The tray app is "<brand>" and the background binary is "<brand>-agent" (the Windows installer
+    // can rename both to a chosen name), so derive the pair from this binary's own name rather than
+    // a fixed "glenley". Running as the tray app: use it; running as the agent: prefer its tray app.
     let tray_supported = cfg!(any(target_os = "macos", target_os = "windows"));
-    let is_app = exe.file_name().is_some_and(|n| n == app_name);
-    let sibling = exe.with_file_name(app_name);
+    let stem = exe.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
+    let (is_app, sibling) = match stem.strip_suffix("-agent") {
+        Some(app_stem) => {
+            let name = match exe.extension().and_then(|e| e.to_str()) {
+                Some(ext) => format!("{app_stem}.{ext}"),
+                None => app_stem.to_owned(),
+            };
+            (false, exe.with_file_name(name))
+        }
+        None => (true, exe.clone()),
+    };
     Ok(match () {
         _ if tray_supported && is_app => Launch {
             exe,

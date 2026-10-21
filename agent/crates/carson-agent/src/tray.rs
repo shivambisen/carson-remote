@@ -32,6 +32,29 @@ const DEFAULT_SERVER: Option<&str> = option_env!("CARSON_DEFAULT_SERVER");
 
 const APP_HTML: &str = include_str!("../assets/app.html");
 
+/// The product name shown in the window, tray and (on Windows) Task Manager.
+const DEFAULT_BRAND: &str = "glenley";
+
+/// The display name for this install, taken from the executable's own file name so a copy the
+/// Windows installer renamed (e.g. "Acme Support.exe") shows that name everywhere. The background
+/// binary is named "<brand>-agent", so a trailing "-agent" is dropped. Falls back to "glenley".
+fn brand() -> String {
+    std::env::current_exe()
+        .ok()
+        .as_deref()
+        .map(brand_from)
+        .unwrap_or_else(|| DEFAULT_BRAND.to_owned())
+}
+
+fn brand_from(exe: &std::path::Path) -> String {
+    exe.file_stem()
+        .and_then(|s| s.to_str())
+        .map(|s| s.strip_suffix("-agent").unwrap_or(s).trim())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(DEFAULT_BRAND)
+        .to_owned()
+}
+
 /// Loopback port the running copy listens on, so a second launch can ask it to show its window.
 const INSTANCE_PORT: u16 = 47533;
 
@@ -132,8 +155,9 @@ pub fn run(dir: PathBuf, server: Option<String>, background: bool) -> Result<()>
             .context("start agent thread")?;
     }
 
+    let brand = brand();
     let window = WindowBuilder::new()
-        .with_title("glenley")
+        .with_title(&brand)
         .with_inner_size(LogicalSize::new(440.0, 700.0))
         .with_min_inner_size(LogicalSize::new(380.0, 520.0))
         .with_window_icon(window_icon())
@@ -143,7 +167,7 @@ pub fn run(dir: PathBuf, server: Option<String>, background: bool) -> Result<()>
     let webview = {
         let p = proxy.clone();
         WebViewBuilder::new()
-            .with_html(APP_HTML)
+            .with_html(APP_HTML.replace("__BRAND__", &brand))
             .with_ipc_handler(move |req| {
                 let _ = p.send_event(UserEvent::Ipc(req.body().clone()));
             })
@@ -365,6 +389,7 @@ struct Tray {
     status: MenuItem,
     open: MenuItem,
     quit: MenuItem,
+    brand: String,
 }
 
 impl Tray {
@@ -380,14 +405,15 @@ impl Tray {
 }
 
 fn build_tray() -> Result<Tray> {
+    let brand = brand();
     let status = MenuItem::new("Starting…", false, None);
-    let open = MenuItem::new("Open glenley", true, None);
-    let quit = MenuItem::new("Quit glenley", true, None);
+    let open = MenuItem::new(format!("Open {brand}"), true, None);
+    let quit = MenuItem::new(format!("Quit {brand}"), true, None);
     let menu = Menu::new();
     menu.append_items(&[&open, &status, &PredefinedMenuItem::separator(), &quit])?;
     let builder = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
-        .with_tooltip("glenley");
+        .with_tooltip(&brand);
     // macOS: a monochrome template icon matches the menu bar (light and dark).
     #[cfg(target_os = "macos")]
     let builder = builder.with_icon_templated(icon(Look::Offline));
@@ -398,6 +424,7 @@ fn build_tray() -> Result<Tray> {
         status,
         open,
         quit,
+        brand,
     })
 }
 
@@ -643,7 +670,9 @@ impl App {
         let Some(tray) = &self.tray else { return };
         if status != self.last_status {
             tray.status.set_text(&status);
-            let _ = tray.icon.set_tooltip(Some(format!("glenley: {status}")));
+            let _ = tray
+                .icon
+                .set_tooltip(Some(format!("{}: {status}", tray.brand)));
             self.last_status = status;
         }
         if look != self.look {
@@ -744,4 +773,23 @@ fn icon(look: Look) -> Icon {
         .flat_map(|&a| [r, g, b, (u16::from(a) * opacity / 255) as u8])
         .collect();
     Icon::from_rgba(px, N as u32, N as u32).expect("valid icon")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn brand_follows_the_executable_name() {
+        assert_eq!(brand_from(Path::new("/x/glenley.exe")), "glenley");
+        assert_eq!(brand_from(Path::new("/x/glenley-agent.exe")), "glenley");
+        assert_eq!(brand_from(Path::new("/x/Acme Support.exe")), "Acme Support");
+        assert_eq!(
+            brand_from(Path::new("/x/Acme Support-agent.exe")),
+            "Acme Support"
+        );
+        assert_eq!(brand_from(Path::new("/x/glenley")), "glenley");
+        assert_eq!(brand_from(Path::new("/x/-agent.exe")), DEFAULT_BRAND);
+    }
 }
