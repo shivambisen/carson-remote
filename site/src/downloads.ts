@@ -2,6 +2,8 @@
 const LATEST = "https://github.com/shivambisen/carson-remote/releases/latest/download";
 
 export const APP_URL = "https://app.glenley.in";
+/** The same app on its host's own name, for networks that block glenley.in. */
+export const APP_URL_FALLBACK = "https://carson-tgnu.onrender.com";
 export const SOURCE_URL = "https://github.com/shivambisen/carson-remote";
 
 export type Platform = "mac-arm" | "mac-intel" | "windows" | "other";

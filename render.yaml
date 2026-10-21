@@ -22,6 +22,10 @@ services:
         value: https://app.glenley.in
       - key: CARSON_TRUST_PROXY
         value: "true"
+      # Second address for networks that block glenley.in. Also add
+      # https://carson-tgnu.onrender.com/auth/google/callback to the Google OAuth client.
+      - key: CARSON_ALT_PUBLIC_URLS
+        value: https://carson-tgnu.onrender.com
       - key: CARSON_TURN_SECRET
         generateValue: true
       - key: CARSON_STUN_URLS

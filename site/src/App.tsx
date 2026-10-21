@@ -1,8 +1,9 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, type AnchorHTMLAttributes, type ReactNode } from "react";
 import { ArrowRight, Check, Code2, Download, KeyRound, Laptop, Lock, MonitorSmartphone, MousePointer2, Radio, ShieldCheck, Zap } from "lucide-react";
 
 import { MARK_PATH } from "./logo";
-import { APP_URL, currentUAData, detectPlatform, DOWNLOADS, refinePlatform, SOURCE_URL, WINDOWS_PORTABLE, type Platform } from "./downloads";
+import { useAppUrl } from "./appUrl";
+import { currentUAData, detectPlatform, DOWNLOADS, refinePlatform, SOURCE_URL, WINDOWS_PORTABLE, type Platform } from "./downloads";
 
 function usePlatform(): Platform {
   const [platform, setPlatform] = useState<Platform>(() => detectPlatform(navigator.userAgent, currentUAData()));
@@ -10,6 +11,11 @@ function usePlatform(): Platform {
     void refinePlatform(platform, currentUAData()).then(setPlatform);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps -- once, on load
   return platform;
+}
+
+/** A link to the app, at whichever address this network can reach. */
+function AppLink(props: Omit<AnchorHTMLAttributes<HTMLAnchorElement>, "href">) {
+  return <a {...props} href={useAppUrl()} />;
 }
 
 function Mark({ className }: { className?: string }) {
@@ -85,14 +91,14 @@ function Nav({ platform }: { platform: Platform }) {
         <div className="flex-1" />
         {platform === "other" ? (
           // Phones and tablets can't host glenley, but they can connect.
-          <a href={APP_URL} className={btn("accent", "sm")}>
+          <AppLink className={btn("accent", "sm")}>
             Connect <ArrowRight className="size-4" />
-          </a>
+          </AppLink>
         ) : (
           <>
-            <a href={APP_URL} className="hidden text-[15px] font-medium text-ink/80 hover:text-ink sm:inline">
+            <AppLink className="hidden text-[15px] font-medium text-ink/80 hover:text-ink sm:inline">
               Connect
-            </a>
+            </AppLink>
             <DownloadButton platform={platform} size="sm" />
           </>
         )}
@@ -175,9 +181,9 @@ function Hero({ platform }: { platform: Platform }) {
         </p>
         <div className="mt-9 flex flex-col items-center justify-center gap-4 sm:flex-row">
           <DownloadButton platform={platform} />
-          <a href={APP_URL} className="group inline-flex items-center gap-1.5 px-3 py-3 text-[15px] font-medium text-ink/80 hover:text-ink">
+          <AppLink className="group inline-flex items-center gap-1.5 px-3 py-3 text-[15px] font-medium text-ink/80 hover:text-ink">
             Connect to a computer <ArrowRight className="size-4 transition-transform group-hover:translate-x-0.5" />
-          </a>
+          </AppLink>
         </div>
         <p className="mt-5 text-[13px] text-faint">
           {platform === "other" ? (
@@ -361,9 +367,9 @@ function HowItWorks({ platform }: { platform: Platform }) {
                   />
                 </div>
                 <div className="mt-9">
-                  <a href={APP_URL} className={btn("dark")}>
+                  <AppLink className={btn("dark")}>
                     Open glenley <ArrowRight className="size-4" />
-                  </a>
+                  </AppLink>
                 </div>
               </div>
               <DevicesMock />
@@ -488,9 +494,9 @@ function PriceCard() {
             </li>
           ))}
         </ul>
-        <a href={APP_URL} className={`${btn("dark", "sm")} mt-7 w-full`}>
+        <AppLink className={`${btn("dark", "sm")} mt-7 w-full`}>
           Get glenley <ArrowRight className="size-4" />
-        </a>
+        </AppLink>
         <p className="mt-3 text-center text-xs text-faint">Sign in, then pay with UPI, card or netbanking</p>
       </div>
     </div>
@@ -548,9 +554,9 @@ function DownloadSection({ platform }: { platform: Platform }) {
         </div>
         <p className="mt-8 text-center text-[13px] text-faint">
           Linux hosts are coming. Already installed?{" "}
-          <a href={APP_URL} className="text-ink underline underline-offset-4">
+          <AppLink className="text-ink underline underline-offset-4">
             Connect now
-          </a>
+          </AppLink>
         </p>
       </div>
     </section>
@@ -596,7 +602,7 @@ function Footer() {
         </span>
         <span>₹99 once · open source (Apache-2.0)</span>
         <div className="flex-1" />
-        <a href={APP_URL} className="hover:text-ink">Connect</a>
+        <AppLink className="hover:text-ink">Connect</AppLink>
         <a href="#download" className="hover:text-ink">Download</a>
         <a href={SOURCE_URL} className="hover:text-ink">GitHub</a>
       </div>

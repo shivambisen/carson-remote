@@ -108,3 +108,16 @@ func TestAddrFollowsPlatformPort(t *testing.T) {
 		t.Fatalf("CARSON_ADDR must win, got %q", cfg.Addr)
 	}
 }
+
+func TestLoadAltPublicURLs(t *testing.T) {
+	cfg, err := Load(env(map[string]string{"CARSON_DEV": "1", "CARSON_ALT_PUBLIC_URLS": "https://x.onrender.com/, https://y.example"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.AltPublicURLs) != 2 || cfg.AltPublicURLs[0].String() != "https://x.onrender.com" {
+		t.Fatalf("AltPublicURLs = %v", cfg.AltPublicURLs)
+	}
+	if _, err := Load(env(map[string]string{"CARSON_DEV": "1", "CARSON_ALT_PUBLIC_URLS": "https://x/path"})); err == nil {
+		t.Fatal("accepted an address with a path")
+	}
+}

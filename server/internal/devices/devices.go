@@ -200,7 +200,7 @@ func (s *Service) handlePairStart(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteJSON(w, http.StatusOK, map[string]any{
 			"pairing_id":       p.ID,
 			"user_code":        code,
-			"verification_url": s.Auth.PublicURL.String() + "/#/pair",
+			"verification_url": s.Auth.PublicURLFor(r).String() + "/#/pair",
 			"expires_in":       int(PairingTTL.Seconds()),
 			"interval":         int(PollInterval.Seconds()),
 		})

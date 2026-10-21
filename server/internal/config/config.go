@@ -15,6 +15,8 @@ import (
 type Config struct {
 	Addr      string
 	PublicURL *url.URL
+	// AltPublicURLs are other https addresses of this server, for networks that block PublicURL's domain.
+	AltPublicURLs []*url.URL
 	DBPath    string
 	// DatabaseURL, if set (postgres://…), is used instead of the SQLite file at DBPath.
 	DatabaseURL string
@@ -147,6 +149,16 @@ func Load(getenv func(string) string) (Config, error) {
 		errs = append(errs, fmt.Errorf("CARSON_PUBLIC_URL: must be an absolute http(s) URL, got %q", u))
 	default:
 		cfg.PublicURL = u
+	}
+
+	for _, raw := range splitList(getenv("CARSON_ALT_PUBLIC_URLS")) {
+		u, err := url.Parse(raw)
+		if err != nil || u.Host == "" || (u.Path != "" && u.Path != "/") || (u.Scheme != "https" && !(cfg.Dev && u.Scheme == "http")) {
+			errs = append(errs, fmt.Errorf("CARSON_ALT_PUBLIC_URLS: %q is not an address like https://host", raw))
+			continue
+		}
+		u.Path = ""
+		cfg.AltPublicURLs = append(cfg.AltPublicURLs, u)
 	}
 
 	if !cfg.Dev {

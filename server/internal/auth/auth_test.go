@@ -312,3 +312,31 @@ func TestOIDCLoginRejectsNonceMismatch(t *testing.T) {
 		t.Fatalf("redirect = %q", got)
 	}
 }
+
+func TestAltPublicURLs(t *testing.T) {
+	pub, _ := url.Parse("https://app.example.in")
+	alt, _ := url.Parse("https://example.onrender.com")
+	s := &Service{PublicURL: pub, AltPublicURLs: []*url.URL{alt}}
+	req := func(host, origin string) *http.Request {
+		r := httptest.NewRequest(http.MethodPost, "/", nil)
+		r.Host = host
+		if origin != "" {
+			r.Header.Set("Origin", origin)
+		}
+		return r
+	}
+	if got := s.redirectURL(req("example.onrender.com", ""), "google"); got != "https://example.onrender.com/auth/google/callback" {
+		t.Errorf("alt host callback = %q", got)
+	}
+	if got := s.redirectURL(req("app.example.in", ""), "google"); got != "https://app.example.in/auth/google/callback" {
+		t.Errorf("main host callback = %q", got)
+	}
+	if got := s.PublicURLFor(req("evil.test", "")); got != pub {
+		t.Errorf("unknown host = %v, want the main URL", got)
+	}
+	for origin, want := range map[string]bool{"https://app.example.in": true, "https://example.onrender.com": true, "https://evil.test": false} {
+		if got := s.OriginAllowed(req("app.example.in", origin)); got != want {
+			t.Errorf("OriginAllowed(%q) = %v, want %v", origin, got, want)
+		}
+	}
+}

@@ -425,7 +425,8 @@ pub(crate) async fn pair_with(
     }
     // Browser sign-in (no code): the page hands a one-time grant back to this loopback port.
     let loopback = signin::Loopback::bind().await?;
-    let link = loopback.url(&server, &start.pairing_id);
+    // The address that answered pair_start: an alternate when the main one is blocked here.
+    let link = loopback.url(api.base(), &start.pairing_id);
     println!("To add \"{name}\" to your glenley account, sign in at:\n\n    {link}\n");
     if open_browser && service::open_browser(&link) {
         println!("(opened in your browser)");
@@ -435,7 +436,7 @@ pub(crate) async fn pair_with(
         start.expires_in / 60,
         start.user_code
     );
-    let done_url = format!("{server}/#/connected?name={}", url_escape(&name));
+    let done_url = format!("{}/#/connected?name={}", api.base(), url_escape(&name));
     let signed_in = loopback.grant(&done_url);
     tokio::pin!(signed_in);
 

@@ -33,6 +33,9 @@ type Service struct {
 	Store     *store.Store
 	Providers map[string]Provider
 	PublicURL *url.URL
+	// AltPublicURLs are other addresses of this server (e.g. the host's own onrender.com name, for
+	// networks that block the main domain). Requests arriving on one of them sign in and redirect there.
+	AltPublicURLs []*url.URL
 	// AllowedOrigins are extra browser origins (besides PublicURL) for cookie requests.
 	AllowedOrigins []string
 	Dev            bool
@@ -102,7 +105,26 @@ func (s *Service) OriginAllowed(r *http.Request) bool {
 	if origin == "" {
 		return false
 	}
-	return origin == s.PublicURL.Scheme+"://"+s.PublicURL.Host || slices.Contains(s.AllowedOrigins, origin)
+	if origin == s.PublicURL.Scheme+"://"+s.PublicURL.Host || slices.Contains(s.AllowedOrigins, origin) {
+		return true
+	}
+	for _, u := range s.AltPublicURLs {
+		if origin == u.Scheme+"://"+u.Host {
+			return true
+		}
+	}
+	return false
+}
+
+// PublicURLFor is the public address the request arrived on: one of AltPublicURLs when its host
+// matches, otherwise PublicURL.
+func (s *Service) PublicURLFor(r *http.Request) *url.URL {
+	for _, u := range s.AltPublicURLs {
+		if strings.EqualFold(r.Host, u.Host) {
+			return u
+		}
+	}
+	return s.PublicURL
 }
 
 func (s *Service) handleProviders(w http.ResponseWriter, _ *http.Request) {
@@ -114,8 +136,8 @@ func (s *Service) handleProviders(w http.ResponseWriter, _ *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"providers": names, "dev": s.Dev})
 }
 
-func (s *Service) redirectURL(provider string) string {
-	return s.PublicURL.JoinPath("auth", provider, "callback").String()
+func (s *Service) redirectURL(r *http.Request, provider string) string {
+	return s.PublicURLFor(r).JoinPath("auth", provider, "callback").String()
 }
 
 func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -143,7 +165,7 @@ func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), providerTimeout)
 	defer cancel()
-	target, err := p.AuthURL(ctx, state, verifier, nonce, s.redirectURL(p.Name()))
+	target, err := p.AuthURL(ctx, state, verifier, nonce, s.redirectURL(r, p.Name()))
 	if err != nil {
 		s.Log.Error("build auth url", "provider", p.Name(), "err", err)
 		httpx.WriteError(w, http.StatusBadGateway, "provider_unavailable", "login provider unavailable")
@@ -178,7 +200,7 @@ func (s *Service) handleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), providerTimeout)
 	defer cancel()
-	ident, err := p.Exchange(ctx, q.Get("code"), st.Verifier, st.Nonce, s.redirectURL(name))
+	ident, err := p.Exchange(ctx, q.Get("code"), st.Verifier, st.Nonce, s.redirectURL(r, name))
 	if errors.Is(err, ErrUnverifiedEmail) {
 		fail("unverified_email")
 		return

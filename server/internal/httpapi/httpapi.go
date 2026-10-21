@@ -44,7 +44,7 @@ func New(cfg config.Config, st *store.Store, log *slog.Logger) *Server {
 
 	auditLog := &audit.Log{Store: st, Log: log, Now: now}
 	authSvc := &auth.Service{
-		Store: st, Providers: providers, PublicURL: cfg.PublicURL, AllowedOrigins: cfg.AllowedOrigins,
+		Store: st, Providers: providers, PublicURL: cfg.PublicURL, AltPublicURLs: cfg.AltPublicURLs, AllowedOrigins: cfg.AllowedOrigins,
 		Dev: cfg.Dev, TrustProxy: cfg.TrustProxy, Log: log, Now: now,
 		LoginLimiter: ratelimit.New(20, time.Minute, 20),
 		Audit:        auditLog,
