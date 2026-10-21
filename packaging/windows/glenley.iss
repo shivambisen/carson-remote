@@ -6,6 +6,12 @@
 ; "Acme Support.exe" and "Acme Support-agent.exe"), so the Start menu, Task Manager and the app
 ; window all show it. Renaming the files does not touch their bytes, so the code signature stays
 ; valid. The app reads its own file name to know what to call itself (see tray.rs `brand`).
+;
+; It also offers to pick a .ico file to use instead of the default mark: the Start menu shortcut,
+; the taskbar and the uninstall entry use it directly (plain files Explorer reads, same as the
+; name above, untouched by signing); the running app window and tray pick it up too (it's copied
+; in as "logo.ico" next to the binaries, and tray.rs's `custom_logo` loads it from there, falling
+; back to the default mark if it's missing or unreadable).
 
 #ifndef Version
   #define Version "0.0.0"
@@ -28,7 +34,7 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayName={code:GetDisplay}
-UninstallDisplayIcon={app}\{code:GetExe}
+UninstallDisplayIcon={code:GetIcon}
 ; The app is stopped by [Code] below; Windows' Restart Manager can wait forever on a copy that
 ; isn't responding, so don't use it.
 CloseApplications=no
@@ -39,9 +45,11 @@ Source: "..\..\agent\target\release\glenley.exe"; DestDir: "{app}"; DestName: "{
 Source: "..\..\agent\target\release\glenley-agent.exe"; DestDir: "{app}"; DestName: "{code:GetAgentExe}"; Flags: ignoreversion
 Source: "..\..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"
 Source: "..\icons\glenley.ico"; DestDir: "{app}"
+; The chosen logo, if any: copied in by [Code] below (CurStepChanged), not listed here, since it
+; comes from wherever the user's file picker pointed and isn't part of this installer.
 
 [Icons]
-Name: "{userprograms}\{code:GetDisplay}"; Filename: "{app}\{code:GetExe}"; IconFilename: "{app}\glenley.ico"
+Name: "{userprograms}\{code:GetDisplay}"; Filename: "{app}\{code:GetExe}"; IconFilename: "{code:GetIcon}"
 
 [Run]
 Filename: "{app}\{code:GetExe}"; Description: "Start now"; Flags: nowait postinstall
@@ -53,6 +61,7 @@ Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM ""{code:GetExe}"" /IM ""{cod
 [Code]
 var
   NamePage: TInputQueryWizardPage;
+  LogoPage: TInputFileWizardPage;
 
 // Keep only characters that are safe in a Windows file name, cap the length, and don't let the
 // name end in "-agent" (that suffix tells the app which binary is the background one).
@@ -95,6 +104,26 @@ begin
   Result := GetDisplay('') + '-agent.exe';
 end;
 
+// Whether a usable .ico was chosen: it must end in ".ico" and exist (an empty field, the
+// ordinary case, means "keep the default").
+function HasCustomLogo: Boolean;
+var
+  f: String;
+begin
+  f := LogoPage.Values[0];
+  Result := (f <> '') and (CompareText(Copy(f, Length(f) - 3, 4), '.ico') = 0) and FileExists(f);
+end;
+
+// The icon for the Start menu shortcut and the uninstall entry: the chosen logo once it's been
+// copied in by CurStepChanged below, else the default mark.
+function GetIcon(Param: String): String;
+begin
+  if HasCustomLogo then
+    Result := ExpandConstant('{app}\logo.ico')
+  else
+    Result := ExpandConstant('{app}\glenley.ico');
+end;
+
 procedure InitializeWizard;
 begin
   NamePage := CreateInputQueryPage(wpWelcome,
@@ -103,6 +132,22 @@ begin
     'This name is shown in the Start menu, the app window and Task Manager. Keep "glenley" or type your own, then click Next.');
   NamePage.Add('Name:', False);
   NamePage.Values[0] := 'glenley';
+
+  LogoPage := CreateInputFilePage(NamePage.ID,
+    'Pick a logo (optional)',
+    'Use your own icon instead of the glenley mark?',
+    'Shown in the Start menu, the taskbar and the app window. Needs to be a .ico file (most icon ' +
+    'editors and online converters can make one from a PNG). Leave this blank to keep the glenley mark.');
+  LogoPage.Add('Icon file (.ico):', 'Icon files|*.ico', '.ico');
+  LogoPage.Values[0] := '';
+end;
+
+// Copies the chosen logo in under a fixed name, so GetIcon and the running app (tray.rs
+// `custom_logo`) always know where to look. Runs after [Files] has installed the binaries.
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if (CurStep = ssPostInstall) and HasCustomLogo then
+    FileCopy(LogoPage.Values[0], ExpandConstant('{app}\logo.ico'), False);
 end;
 
 // Stop every running copy (the app and its background binary) before files are replaced. End the

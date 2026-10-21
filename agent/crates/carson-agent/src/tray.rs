@@ -167,7 +167,11 @@ pub fn run(dir: PathBuf, server: Option<String>, background: bool) -> Result<()>
     let webview = {
         let p = proxy.clone();
         WebViewBuilder::new()
-            .with_html(APP_HTML.replace("__BRAND__", &brand))
+            .with_html(
+                APP_HTML
+                    .replace("__BRAND__", &brand)
+                    .replace("__LOGO_SRC__", &custom_logo_data_uri().unwrap_or_default()),
+            )
             .with_ipc_handler(move |req| {
                 let _ = p.send_event(UserEvent::Ipc(req.body().clone()));
             })
@@ -760,8 +764,41 @@ fn open_permission_settings(screen: bool) {
     }
 }
 
-/// The window icon (Windows title bar and taskbar): the mark in ink.
+/// An operator-uploaded logo, installed as "logo.ico" next to this binary (the Windows installer
+/// copies it there when someone picks one; the default is no file, i.e. the placeholder mark
+/// below). Decoding failures (missing file, a bad or unreadable image) fall back to that
+/// placeholder too, rather than failing to start.
+fn custom_logo() -> Option<&'static image::DynamicImage> {
+    static LOGO: std::sync::OnceLock<Option<image::DynamicImage>> = std::sync::OnceLock::new();
+    LOGO.get_or_init(|| {
+        let path = std::env::current_exe().ok()?.with_file_name("logo.ico");
+        match image::open(&path) {
+            Ok(img) => Some(img),
+            Err(e) if path.is_file() => {
+                tracing::warn!(error = %e, path = %path.display(), "custom logo unreadable; using the placeholder mark");
+                None
+            }
+            Err(_) => None, // no logo.ico installed: the ordinary, expected case
+        }
+    })
+    .as_ref()
+}
+
+/// `img` resized to a square `size × size` RGBA bitmap, as `Icon::from_rgba` wants it.
+fn square_rgba(img: &image::DynamicImage, size: u32) -> Vec<u8> {
+    img.resize_exact(size, size, image::imageops::FilterType::Lanczos3)
+        .to_rgba8()
+        .into_raw()
+}
+
+/// The window icon (Windows title bar and taskbar): the custom logo if one was installed, else
+/// the mark in ink.
 fn window_icon() -> Option<tao::window::Icon> {
+    if let Some(img) = custom_logo()
+        && let Ok(icon) = tao::window::Icon::from_rgba(square_rgba(img, 32), 32, 32)
+    {
+        return Some(icon);
+    }
     const N: usize = 32;
     const MASK: &[u8; N * N] = include_bytes!("../assets/tray-mask-32.alpha");
     let px = MASK.iter().flat_map(|&a| [0x0E, 0x12, 0x29, a]).collect();
@@ -769,8 +806,15 @@ fn window_icon() -> Option<tao::window::Icon> {
 }
 
 /// The glenley mark at 32×32 (alpha mask), tinted per state. Live: orange; online: teal;
-/// offline: grey (Windows) or the template outline (macOS).
+/// offline: grey (Windows) or the template outline (macOS). A custom logo is shown as-is instead,
+/// the same for every state: an arbitrary image has no sensible way to tint, so the connection
+/// state is still conveyed by the tray tooltip text and the window's own "Live" banner.
 fn icon(look: Look) -> Icon {
+    if let Some(img) = custom_logo()
+        && let Ok(icon) = Icon::from_rgba(square_rgba(img, 32), 32, 32)
+    {
+        return icon;
+    }
     const N: usize = 32;
     const MASK: &[u8; N * N] = include_bytes!("../assets/tray-mask-32.alpha");
     let ([r, g, b], opacity): ([u8; 3], u16) = match look {
@@ -787,10 +831,57 @@ fn icon(look: Look) -> Icon {
     Icon::from_rgba(px, N as u32, N as u32).expect("valid icon")
 }
 
+/// `img` as a data: URI (PNG, however it was decoded), for the in-window header: the webview can
+/// display this directly, and not every system web view renders `.ico` as an `<img>` source.
+fn png_data_uri(img: &image::DynamicImage) -> Option<String> {
+    let img = img.resize(96, 96, image::imageops::FilterType::Lanczos3);
+    let mut png = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .ok()?;
+    use base64::Engine;
+    Some(format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(png)
+    ))
+}
+
+/// The custom logo (if any), as a data: URI for the in-window header.
+fn custom_logo_data_uri() -> Option<String> {
+    png_data_uri(custom_logo()?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::Path;
+
+    fn solid(r: u8, g: u8, b: u8) -> image::DynamicImage {
+        image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            4,
+            4,
+            image::Rgba([r, g, b, 255]),
+        ))
+    }
+
+    #[test]
+    fn square_rgba_resizes_to_the_requested_square() {
+        let px = square_rgba(&solid(10, 20, 30), 32);
+        assert_eq!(px.len(), 32 * 32 * 4);
+        assert_eq!(&px[0..4], &[10, 20, 30, 255]);
+    }
+
+    #[test]
+    fn png_data_uri_round_trips_a_decodable_image() {
+        let uri = png_data_uri(&solid(200, 100, 50)).expect("encodes");
+        assert!(uri.starts_with("data:image/png;base64,"));
+        use base64::Engine;
+        let b64 = uri.strip_prefix("data:image/png;base64,").unwrap();
+        let png = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .unwrap();
+        let decoded = image::load_from_memory(&png).expect("valid PNG").to_rgba8();
+        assert_eq!(decoded.get_pixel(0, 0).0, [200, 100, 50, 255]);
+    }
 
     #[test]
     fn brand_follows_the_executable_name() {

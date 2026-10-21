@@ -74,6 +74,10 @@ windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_UI_Window
 # Tray icon + native menu (macOS menu bar, Windows notification area).
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 tray-icon = "=0.26.0"
+# Decodes an operator-uploaded logo (.ico, installed by the Windows installer) for the window
+# icon, tray icon and in-window header; well-audited rather than a hand-rolled ICO parser, since
+# the input is a file someone else chose.
+image = { version = "0.25.9", default-features = false, features = ["ico", "png"] }
 # The app window: a native window (tao) with a system web view (wry: WebKit / WebView2)
 # showing the embedded UI.
 tao = "=0.37.1"
