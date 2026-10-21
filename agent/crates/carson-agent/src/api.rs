@@ -70,6 +70,42 @@ struct ErrorDetail {
 const ALTERNATES: &[(&str, &str)] =
     &[("https://app.glenley.in", "https://carson-tgnu.onrender.com")];
 
+/// A quick, synchronous check of whether `base`'s host answers a plain TCP connection, used to
+/// pick an address worth opening in a browser (opening a dead link gives no useful error page).
+/// Blocks for up to ~1.2s; call it off the UI thread.
+fn tcp_reachable(base: &str) -> bool {
+    let Ok(url) = url::Url::parse(base) else {
+        return true; // can't tell; don't block opening it
+    };
+    let Some(host) = url.host_str() else {
+        return true;
+    };
+    let port = url
+        .port_or_known_default()
+        .unwrap_or(if url.scheme() == "https" { 443 } else { 80 });
+    use std::net::ToSocketAddrs;
+    let Ok(mut addrs) = (host, port).to_socket_addrs() else {
+        return false;
+    };
+    addrs.any(|addr| {
+        std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(1200)).is_ok()
+    })
+}
+
+/// The address to open in a browser for `base`: `base` itself if reachable, else its known
+/// alternate (some campus and office networks block the main domain outright).
+pub fn reachable_base(base: &str) -> String {
+    let base = base.trim_end_matches('/');
+    if tcp_reachable(base) {
+        return base.to_owned();
+    }
+    ALTERNATES
+        .iter()
+        .find(|(main, _)| *main == base)
+        .map(|(_, alt)| (*alt).to_owned())
+        .unwrap_or_else(|| base.to_owned())
+}
+
 pub struct Api {
     http: reqwest::Client,
     /// The configured server first, then its alternates.
@@ -260,6 +296,25 @@ fn is_status(err: &anyhow::Error, want: u16) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tcp_reachable_detects_a_listening_port() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        assert!(tcp_reachable(&base));
+    }
+
+    #[test]
+    fn tcp_reachable_detects_a_closed_port() {
+        // Port 9 ("discard") on localhost: nothing listens, so the connection is refused at once.
+        assert!(!tcp_reachable("http://127.0.0.1:9"));
+    }
+
+    #[test]
+    fn reachable_base_keeps_an_unknown_unreachable_address_unchanged() {
+        // Not in ALTERNATES, so there is nothing to fall back to.
+        assert_eq!(reachable_base("http://127.0.0.1:9/"), "http://127.0.0.1:9");
+    }
 
     #[test]
     fn ws_url_maps_scheme() {

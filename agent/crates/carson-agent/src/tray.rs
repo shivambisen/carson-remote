@@ -282,13 +282,13 @@ async fn controller(
                     tracing::error!(error = %msg, "agent stopped");
                     note(Note::Problem(Some(short(&msg))));
                     match cmds.recv().await {
-                        Some(Cmd::Leave) => leave(&dir).await,
+                        Some(Cmd::Leave) => leave(&dir, &note).await,
                         Some(Cmd::Quit) | None => return,
                         Some(_) => {}
                     }
                 }
                 c = cmds.recv() => match c {
-                    Some(Cmd::Leave) => leave(&dir).await,
+                    Some(Cmd::Leave) => leave(&dir, &note).await,
                     Some(Cmd::Quit) | None => return,
                     Some(_) => {}
                 },
@@ -364,10 +364,14 @@ fn sign_out(dir: &Path) {
     }
 }
 
-async fn leave(dir: &Path) {
+/// Removes this computer from its account, showing a spinner for however long that takes: it
+/// calls the server, which can be slow on an unreliable connection.
+async fn leave(dir: &Path, note: &impl Fn(Note)) {
+    note(Note::Busy(Some("leave")));
     if let Err(e) = crate::leave(dir.to_path_buf()).await {
         tracing::error!(error = %format!("{e:#}"), "remove from account failed");
     }
+    note(Note::Busy(None));
 }
 
 fn short(msg: &str) -> String {
@@ -495,8 +499,11 @@ impl App {
     fn show(&mut self, target: &EventLoopWindowTarget<UserEvent>) {
         if self.webview.is_none() {
             // No web view on this system: the website is the next best thing.
-            if let Some(url) = self.website() {
-                service::open_browser(&url);
+            if let Some(origin) = self.website_origin() {
+                std::thread::spawn(move || {
+                    let origin = crate::api::reachable_base(&origin);
+                    service::open_browser(&format!("{origin}/#/devices"));
+                });
             }
             return;
         }
@@ -511,11 +518,11 @@ impl App {
         set_dock_icon(target, false);
     }
 
-    fn website(&self) -> Option<String> {
+    /// The configured server's origin (no path), for `/#/devices`.
+    fn website_origin(&self) -> Option<String> {
         self.server
             .clone()
             .or_else(|| DEFAULT_SERVER.map(str::to_owned))
-            .map(|s| format!("{s}/#/devices"))
     }
 
     fn on_note(&mut self, note: Note) {
@@ -577,8 +584,13 @@ impl App {
             }
             "quit" => return true,
             "website" => {
-                if let Some(url) = self.website() {
-                    service::open_browser(&url);
+                if let Some(origin) = self.website_origin() {
+                    // A quick TCP check off the UI thread: on networks that block the main
+                    // domain outright, open the working address instead of a dead link.
+                    std::thread::spawn(move || {
+                        let origin = crate::api::reachable_base(&origin);
+                        service::open_browser(&format!("{origin}/#/devices"));
+                    });
                 }
             }
             "copy" => {

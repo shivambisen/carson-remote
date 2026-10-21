@@ -71,6 +71,11 @@
   footer { margin-top: auto; display: flex; justify-content: space-between; align-items: center; padding-top: 4px; }
   .small { padding: 8px 12px; font-size: 13px; }
   .hidden { display: none !important; }
+  .spinner { width: 18px; height: 18px; border-radius: 50%; border: 2px solid rgb(14 18 41 / .15); border-top-color: var(--ink); flex: none; animation: spin .7s linear infinite; }
+  .spinner.light { border-color: rgb(255 255 255 / .35); border-top-color: #fff; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .overlay { position: fixed; inset: 0; background: rgb(14 18 41 / .35); display: flex; align-items: center; justify-content: center; padding: 22px; }
+  .overlay .card { width: 100%; max-width: 300px; }
 </style>
 </head>
 <body>
@@ -110,8 +115,12 @@
     </div>
   </section>
 
-  <!-- Waiting: browser sign-in or code -->
+  <!-- Waiting: getting a code, browser sign-in, or the code itself -->
   <section id="waiting" class="card stack hidden">
+    <div id="code-wait" class="hidden" style="text-align:center; display:flex; flex-direction:column; align-items:center; gap:10px; padding:8px 0">
+      <div class="spinner"></div>
+      <p style="margin-top:0">Getting your code…</p>
+    </div>
     <div id="code-box" class="hidden">
       <h2 style="text-align:center">Your code</h2>
       <div class="code" id="code"></div>
@@ -152,6 +161,28 @@
     <button class="link" id="quit">Quit __BRAND__</button>
   </footer>
 </main>
+
+<!-- Remove-from-account confirmation: an in-page dialog, not the native confirm(), so it always
+     shows up inside the window. -->
+<div id="leave-confirm" class="overlay hidden">
+  <div class="card stack">
+    <h2>Remove this computer?</h2>
+    <p style="margin-top:-2px">It can't be reached until it's set up again.</p>
+    <div class="row" style="margin-top:6px">
+      <button class="ghost" id="leave-cancel">Cancel</button>
+      <button class="primary" id="leave-ok" style="background:var(--bad)">Remove</button>
+    </div>
+  </div>
+</div>
+
+<!-- Shown while the removal itself is in progress: it talks to the server, so it can take a
+     few seconds, especially on a slow or unreliable connection. -->
+<div id="removing" class="overlay hidden">
+  <div class="card stack" style="align-items:center; text-align:center">
+    <div class="spinner"></div>
+    <p style="margin-top:0">Removing this computer…</p>
+  </div>
+</div>
 <script>
   const $ = (id) => document.getElementById(id);
   const send = (msg) => window.ipc.postMessage(JSON.stringify(msg));
@@ -164,7 +195,9 @@
   $("copy").onclick = () => { if (state && state.code) { send({ cmd: "copy", text: state.code }); $("copy").textContent = "Copied"; setTimeout(() => ($("copy").textContent = "Copy code"), 1500); } };
   $("website").onclick = () => send({ cmd: "website" });
   $("quit").onclick = () => send({ cmd: "quit" });
-  $("leave").onclick = () => { if (confirm("Remove this computer from its account? It can't be reached until it's set up again.")) send({ cmd: "leave" }); };
+  $("leave").onclick = () => show("leave-confirm", true);
+  $("leave-cancel").onclick = () => show("leave-confirm", false);
+  $("leave-ok").onclick = () => { show("leave-confirm", false); send({ cmd: "leave" }); };
   $("fix-screen").onclick = () => send({ cmd: "permission", which: "screen" });
   $("fix-access").onclick = () => send({ cmd: "permission", which: "accessibility" });
   $("restart").onclick = () => send({ cmd: "restart" });
@@ -185,8 +218,10 @@
       const paired = !!s.paired;
       show("setup", !paired && s.busy === null);
       show("waiting", !paired && s.busy !== null);
+      show("code-wait", s.busy === "code" && !s.code);
       show("code-box", s.busy === "code" && !!s.code);
-      show("signin-box", s.busy === "signin" || (s.busy === "code" && !s.code));
+      show("signin-box", s.busy === "signin");
+      show("removing", s.busy === "leave");
       $("code").textContent = s.code || "";
       $("code-hint").textContent = s.codeOnce ? "This computer leaves their account after they disconnect." : "This computer stays on their account until it's removed.";
       show("ready", paired);
