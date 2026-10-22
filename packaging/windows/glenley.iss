@@ -191,20 +191,24 @@ begin
     exit;
   if HasCustomLogo then
     FileCopy(LogoPage.Values[0], ExpandConstant('{app}\logo.ico'), False);
+  // ewNoWait, not ewWaitUntilTerminated: the UAC prompt this triggers (or a Windows SmartScreen
+  // check on this freshly-downloaded exe, which can precede it) must never be able to block the
+  // rest of Setup. If it never gets answered, this step just never finishes installing the
+  // service - the app and the rest of the install are already done and unaffected either way.
   if EnableServiceCheck.Checked then
     ShellExec('runas', ExpandConstant('{app}\glenley-input-svc.exe'), 'install', '',
-      SW_HIDE, ewWaitUntilTerminated, ResultCode);
+      SW_SHOWNORMAL, ewNoWait, ResultCode);
 end;
 
-// Mirrors the install step: removing the service needs its own elevation too. Quietly a no-op
-// if it was never installed (declined, or install's ShellExec failed/was cancelled).
+// Mirrors the install step: removing the service needs its own elevation too, and must not be
+// able to block the uninstaller either. Quietly a no-op if it was never installed.
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   ResultCode: Integer;
 begin
   if CurUninstallStep = usUninstall then
     ShellExec('runas', ExpandConstant('{app}\glenley-input-svc.exe'), 'uninstall', '',
-      SW_HIDE, ewWaitUntilTerminated, ResultCode);
+      SW_SHOWNORMAL, ewNoWait, ResultCode);
 end;
 
 // Stop every running copy (the app and its background binary) before files are replaced. End the
