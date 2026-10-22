@@ -442,7 +442,7 @@ dependencies = [
 
 [[package]]
 name = "carson-agent"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "anyhow",
  "apple-native-keyring-store",
@@ -489,7 +489,7 @@ dependencies = [
 
 [[package]]
 name = "carson-capture"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "anyhow",
  "core-graphics",
@@ -501,7 +501,7 @@ dependencies = [
 
 [[package]]
 name = "carson-encode"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "anyhow",
  "dirs",
@@ -514,7 +514,7 @@ dependencies = [
 
 [[package]]
 name = "carson-hostui"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "anyhow",
  "objc2",
@@ -525,7 +525,7 @@ dependencies = [
 
 [[package]]
 name = "carson-input"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "anyhow",
  "carson-proto",
@@ -538,7 +538,7 @@ dependencies = [
 
 [[package]]
 name = "carson-input-svc"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "anyhow",
  "carson-input",
@@ -548,7 +548,7 @@ dependencies = [
 
 [[package]]
 name = "carson-proto"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "serde",
  "serde_json",
