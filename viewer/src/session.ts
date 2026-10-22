@@ -57,6 +57,22 @@ interface IceServer {
   credential?: string;
 }
 
+// A single malformed URL (e.g. a trailing "?" from a misconfigured relay env var) makes the
+// browser reject the whole RTCPeerConnection config, so drop just the bad ones here first.
+export function isValidIceUrl(u: string): boolean {
+  const m = /^(stun|stuns|turn|turns):([^?]+)(\?(.*))?$/.exec(u);
+  if (!m) return false;
+  if (!m[2]) return false; // no host[:port]
+  if (m[3] && !m[4]) return false; // "?" with nothing after it
+  return true;
+}
+
+export function sanitizeIceServers(servers: IceServer[]): IceServer[] {
+  return servers
+    .map((s) => ({ ...s, urls: (Array.isArray(s.urls) ? s.urls : [s.urls]).filter(isValidIceUrl) }))
+    .filter((s) => s.urls.length > 0);
+}
+
 const REASONS: Record<string, string> = {
   permission_denied: "glenley on that computer is missing Screen Recording permission. Grant it in System Settings → Privacy & Security → Screen Recording, then restart the agent.",
   capture_failed: "The other computer could not capture its screen.",
@@ -278,8 +294,18 @@ export class ViewerSession {
   }
 
   private createPeer(iceServers: IceServer[]): void {
-    this.relayAvailable = iceServers.some((s) => (Array.isArray(s.urls) ? s.urls : [s.urls]).some((u) => /^turns?:/.test(u)));
-    const pc = new RTCPeerConnection({ iceServers, iceTransportPolicy: this.options.forceRelay ? "relay" : "all" });
+    const clean = sanitizeIceServers(iceServers);
+    this.relayAvailable = clean.some((s) => (Array.isArray(s.urls) ? s.urls : [s.urls]).some((u) => /^turns?:/.test(u)));
+    let pc: RTCPeerConnection;
+    try {
+      pc = new RTCPeerConnection({ iceServers: clean, iceTransportPolicy: this.options.forceRelay ? "relay" : "all" });
+    } catch (e) {
+      // One malformed relay entry must not silently hang every connection for 30s: fall back to
+      // no relay (direct/STUN only still has a chance) rather than leaving this.pc unset.
+      console.error("invalid ICE server config, retrying without a relay", e);
+      this.relayAvailable = false;
+      pc = new RTCPeerConnection({ iceServers: clean.filter((s) => !(Array.isArray(s.urls) ? s.urls : [s.urls]).some((u) => /^turns?:/.test(u))) });
+    }
     this.pc = pc;
     pc.onicecandidate = (ev) => {
       if (ev.candidate) this.send("ice.candidate", ev.candidate.toJSON());
