@@ -1,16 +1,9 @@
 //! Windows input via SendInput, using scancodes so keys are layout-independent.
-//! Reaching the secure desktop (UAC prompts, the lock screen) additionally needs SYSTEM
-//! privilege, which only `carson-input-svc` (an installed Windows service) has; a normal
-//! user process can open and switch to every other desktop but not that one.
+//! Note: input cannot reach the secure desktop (UAC prompts, lock screen) from a user
+//! process; that needs a SYSTEM service (post-M8).
 #![allow(unsafe_code)] // Win32 FFI; each call passes fully initialized, stack-owned structs.
 
 use anyhow::{Result, bail};
-use windows::Win32::System::StationsAndDesktops::{
-    CloseDesktop, DESKTOP_ACCESS_FLAGS, DESKTOP_CONTROL_FLAGS, DESKTOP_CREATEMENU,
-    DESKTOP_CREATEWINDOW, DESKTOP_ENUMERATE, DESKTOP_HOOKCONTROL, DESKTOP_JOURNALPLAYBACK,
-    DESKTOP_JOURNALRECORD, DESKTOP_READOBJECTS, DESKTOP_SWITCHDESKTOP, DESKTOP_WRITEOBJECTS,
-    OpenInputDesktop, SetThreadDesktop,
-};
 use windows::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
 };
@@ -27,34 +20,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::{Backend, keymap};
-
-/// Moves the calling thread onto whatever desktop currently receives input (the ordinary
-/// desktop, or Winlogon's secure desktop during a UAC prompt / the lock screen) before
-/// injecting. A normal user process can already do this for the ordinary desktop; only
-/// SYSTEM can open the secure one, so this is a no-op failure (input still goes to the
-/// thread's last desktop) everywhere except inside `carson-input-svc`.
-fn switch_to_input_desktop() {
-    const ACCESS: DESKTOP_ACCESS_FLAGS = DESKTOP_ACCESS_FLAGS(
-        DESKTOP_CREATEMENU.0
-            | DESKTOP_CREATEWINDOW.0
-            | DESKTOP_ENUMERATE.0
-            | DESKTOP_HOOKCONTROL.0
-            | DESKTOP_JOURNALPLAYBACK.0
-            | DESKTOP_JOURNALRECORD.0
-            | DESKTOP_READOBJECTS.0
-            | DESKTOP_SWITCHDESKTOP.0
-            | DESKTOP_WRITEOBJECTS.0,
-    );
-    // SAFETY: OpenInputDesktop/SetThreadDesktop/CloseDesktop take no pointers we own; `desk`
-    // is a valid handle from OpenInputDesktop, used only while non-null and closed once.
-    unsafe {
-        let Ok(desk) = OpenInputDesktop(DESKTOP_CONTROL_FLAGS(0), false, ACCESS) else {
-            return; // not privileged enough to see the current input desktop; carry on as before
-        };
-        let _ = SetThreadDesktop(desk);
-        let _ = CloseDesktop(desk);
-    }
-}
 
 const XBUTTON1: u32 = 1;
 const XBUTTON2: u32 = 2;
@@ -82,7 +47,6 @@ impl WindowsBackend {
     }
 
     fn send(inputs: &[INPUT]) -> Result<()> {
-        switch_to_input_desktop();
         // SAFETY: `inputs` is a valid slice of initialized INPUT structs.
         let sent = unsafe { SendInput(inputs, std::mem::size_of::<INPUT>() as i32) };
         if sent as usize != inputs.len() {

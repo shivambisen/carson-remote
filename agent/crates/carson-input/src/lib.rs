@@ -13,7 +13,6 @@ use carson_proto::input::InputMessage;
 pub mod keymap;
 #[cfg(target_os = "macos")]
 mod macos;
-pub mod pipe;
 #[cfg(target_os = "windows")]
 mod windows;
 
@@ -72,29 +71,7 @@ impl std::fmt::Display for PermissionDenied {
 
 impl std::error::Error for PermissionDenied {}
 
-/// The OS backend, bypassing `carson-input-svc` even on Windows. Used by the service itself
-/// (which *is* the privileged side — connecting to its own pipe would just recurse) and by
-/// anything that needs to force direct injection.
-pub fn direct_backend() -> Result<Box<dyn Backend>> {
-    #[cfg(target_os = "macos")]
-    {
-        Ok(Box::new(macos::MacBackend::new()?))
-    }
-    #[cfg(target_os = "windows")]
-    {
-        Ok(Box::new(windows::WindowsBackend::new()?))
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        anyhow::bail!("input injection is not implemented on this OS yet")
-    }
-}
-
-/// The platform's native backend. On Windows, prefers `carson-input-svc` (a SYSTEM-level
-/// service, installed by the Windows package) when it's reachable: unlike this process, it
-/// can inject input into other elevated windows and the secure desktop (UAC, the lock
-/// screen). Falls back to injecting directly — still fine for the common case — when the
-/// service isn't installed or isn't running.
+/// The platform's native backend.
 pub fn native_backend() -> Result<Box<dyn Backend>> {
     #[cfg(target_os = "macos")]
     {
@@ -102,9 +79,6 @@ pub fn native_backend() -> Result<Box<dyn Backend>> {
     }
     #[cfg(target_os = "windows")]
     {
-        if let Ok(b) = pipe::PipeBackend::connect() {
-            return Ok(Box::new(b));
-        }
         Ok(Box::new(windows::WindowsBackend::new()?))
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
