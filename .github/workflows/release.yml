@@ -42,7 +42,7 @@ jobs:
       - name: Build (no source-compiled OpenH264)
         working-directory: agent
         env: { CARSON_DEFAULT_SERVER: "${{ vars.CARSON_DEFAULT_SERVER }}" }
-        run: cargo build --release -p carson-agent --bins --no-default-features
+        run: cargo build --release -p carson-agent -p carson-input-svc --bins --no-default-features
       - name: Installer (Inno Setup)
         run: |
           VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' agent/Cargo.toml | head -1)

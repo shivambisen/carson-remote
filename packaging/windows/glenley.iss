@@ -12,6 +12,13 @@
 ; name above, untouched by signing); the running app window and tray pick it up too (it's copied
 ; in as "logo.ico" next to the binaries, and tray.rs's `custom_logo` loads it from there, falling
 ; back to the default mark if it's missing or unreadable).
+;
+; One more thing it offers, opt-in: installing glenley-input-svc, a small Windows service that
+; runs as SYSTEM so remote control still works when another elevated window has focus, or during
+; a UAC prompt / the lock screen - a normal process (this app included) cannot send input there.
+; The app and the rest of this install stay unprivileged either way; only that one step asks for
+; its own, separate admin permission (via ShellExec's "runas"), and declining it just means
+; glenley falls back to injecting input directly, as it always has.
 
 #ifndef Version
   #define Version "0.0.0"
@@ -43,6 +50,7 @@ SetupIconFile=..\icons\glenley.ico
 [Files]
 Source: "..\..\agent\target\release\glenley.exe"; DestDir: "{app}"; DestName: "{code:GetExe}"; Flags: ignoreversion
 Source: "..\..\agent\target\release\glenley-agent.exe"; DestDir: "{app}"; DestName: "{code:GetAgentExe}"; Flags: ignoreversion
+Source: "..\..\agent\target\release\glenley-input-svc.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"
 Source: "..\icons\glenley.ico"; DestDir: "{app}"
 ; The chosen logo, if any: copied in by [Code] below (CurStepChanged), not listed here, since it
@@ -57,11 +65,16 @@ Filename: "{app}\{code:GetExe}"; Description: "Start now"; Flags: nowait postins
 [UninstallRun]
 Filename: "{app}\{code:GetAgentExe}"; Parameters: "service uninstall"; Flags: runhidden; RunOnceId: "LoginItem"
 Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM ""{code:GetExe}"" /IM ""{code:GetAgentExe}"""; Flags: runhidden; RunOnceId: "StopApp"
+; glenley-input-svc.exe uninstall runs from [Code]'s CurUninstallStepChanged below instead of
+; here: removing it needs its own elevation (ShellExec "runas"), which [UninstallRun] has no
+; flag for.
 
 [Code]
 var
   NamePage: TInputQueryWizardPage;
   LogoPage: TInputFileWizardPage;
+  ServicePage: TWizardPage;
+  EnableServiceCheck: TNewCheckBox;
 
 // Keep only characters that are safe in a Windows file name, cap the length, and don't let the
 // name end in "-agent" (that suffix tells the app which binary is the background one).
@@ -140,14 +153,58 @@ begin
     'editors and online converters can make one from a PNG). Leave this blank to keep the glenley mark.');
   LogoPage.Add('Icon file (.ico):', 'Icon files|*.ico', '.ico');
   LogoPage.Values[0] := '';
+
+  ServicePage := CreateCustomPage(LogoPage.ID,
+    'Full remote control',
+    'Let glenley control this computer even when it is not the focused app?');
+  EnableServiceCheck := TNewCheckBox.Create(ServicePage);
+  EnableServiceCheck.Parent := ServicePage.Surface;
+  EnableServiceCheck.Width := ServicePage.SurfaceWidth;
+  EnableServiceCheck.Caption := 'Enable full remote control (recommended)';
+  EnableServiceCheck.Checked := True;
+  with TNewStaticText.Create(ServicePage) do
+  begin
+    Parent := ServicePage.Surface;
+    Top := EnableServiceCheck.Top + EnableServiceCheck.Height + ScaleY(8);
+    Width := ServicePage.SurfaceWidth;
+    WordWrap := True;
+    Caption :=
+      'Without this, remote control can silently stop working whenever another window on ' +
+      'this computer is running "as Administrator", or during a Windows security prompt. ' +
+      'This installs a small Windows service (running as SYSTEM) to fix that - Windows will ' +
+      'ask for admin permission once, separately from the rest of this install, which stays ' +
+      'unprivileged either way. Declining just means remote control keeps working as it does ' +
+      'today, with that one limitation.';
+  end;
 end;
 
 // Copies the chosen logo in under a fixed name, so GetIcon and the running app (tray.rs
-// `custom_logo`) always know where to look. Runs after [Files] has installed the binaries.
+// `custom_logo`) always know where to look. Also installs glenley-input-svc if the user kept
+// that box checked - its own elevation request (ShellExec "runas"), separate from this whole
+// install staying unprivileged. A decline or failure here is not fatal: glenley just falls
+// back to injecting input directly, as it always has.
 procedure CurStepChanged(CurStep: TSetupStep);
+var
+  ResultCode: Integer;
 begin
-  if (CurStep = ssPostInstall) and HasCustomLogo then
+  if CurStep <> ssPostInstall then
+    exit;
+  if HasCustomLogo then
     FileCopy(LogoPage.Values[0], ExpandConstant('{app}\logo.ico'), False);
+  if EnableServiceCheck.Checked then
+    ShellExec('runas', ExpandConstant('{app}\glenley-input-svc.exe'), 'install', '',
+      SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
+// Mirrors the install step: removing the service needs its own elevation too. Quietly a no-op
+// if it was never installed (declined, or install's ShellExec failed/was cancelled).
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  ResultCode: Integer;
+begin
+  if CurUninstallStep = usUninstall then
+    ShellExec('runas', ExpandConstant('{app}\glenley-input-svc.exe'), 'uninstall', '',
+      SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
 
 // Stop every running copy (the app and its background binary) before files are replaced. End the

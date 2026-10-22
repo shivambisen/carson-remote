@@ -1,0 +1,30 @@
+[package]
+name = "carson-input-svc"
+description = "SYSTEM-level Windows service: injects input (even into the secure desktop) on behalf of the per-session glenley agent, over a local named pipe."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "glenley-input-svc"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+carson-input = { path = "../carson-input" }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-service = "0.7"
+windows = { version = "0.62.2", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Security_Authorization",
+  "Win32_System_IO",
+  "Win32_System_Pipes",
+  "Win32_System_RemoteDesktop",
+  "Win32_Storage_FileSystem",
+] }
+
+[lints]
+workspace = true
