@@ -16,6 +16,7 @@ mod keyframe;
 mod keystore;
 mod media;
 mod peer;
+mod relay_bridge;
 mod service;
 mod sessions;
 mod signin;

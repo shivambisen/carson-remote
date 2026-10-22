@@ -23,8 +23,9 @@ use webrtc::media_stream::track_local::static_sample::TrackLocalStaticSample;
 use webrtc::media_stream::track_local::{TrackLocal, TrackLocalEvent};
 use webrtc::peer_connection::{
     MediaEngine, PeerConnection, PeerConnectionBuilder, PeerConnectionEventHandler,
-    RTCConfigurationBuilder, RTCIceCandidateInit, RTCIceServer, RTCPeerConnectionIceEvent,
-    RTCPeerConnectionState, RTCSessionDescription, Registry, register_default_interceptors,
+    RTCConfigurationBuilder, RTCIceCandidateInit, RTCIceServer, RTCIceTransportPolicy,
+    RTCPeerConnectionIceEvent, RTCPeerConnectionState, RTCSessionDescription, Registry,
+    register_default_interceptors,
 };
 
 use carson_proto::input::{CONTROL_CHANNEL, POINTER_CHANNEL};
@@ -135,8 +136,15 @@ pub async fn build_peer(
     let registry = register_default_interceptors(Registry::new(), &mut media_engine)?
         // Application-most, so the default interceptors see all inbound RTCP first.
         .with(Slot::from(14_000), KeyframeRequestForwarder::default());
+    // CARSON_ICE_RELAY_ONLY: diagnostics (and the relay test) — refuse every path but a relay.
+    let policy = if std::env::var_os("CARSON_ICE_RELAY_ONLY").is_some() {
+        RTCIceTransportPolicy::Relay
+    } else {
+        RTCIceTransportPolicy::All
+    };
     let config = RTCConfigurationBuilder::new()
         .with_ice_servers(ice_servers)
+        .with_ice_transport_policy(policy)
         .build();
     let pc = PeerConnectionBuilder::new()
         .with_configuration(config)
@@ -249,7 +257,9 @@ async fn session_inner(
         out: out.clone(),
         events: events_tx.clone(),
     });
-    let pc = build_peer(cfg.ice_servers.clone(), handler)
+    // TLS/TCP relays, which webrtc-rs can't use directly; bridges live until the session ends.
+    let (ice_servers, _relay_bridges) = crate::relay_bridge::expand(cfg.ice_servers.clone()).await;
+    let pc = build_peer(ice_servers, handler)
         .await
         .context("create peer connection")?;
 
@@ -586,6 +596,117 @@ mod tests {
                 }
             });
         }
+    }
+
+    /// End to end through a real TURN server, with the agent able to reach it *only* over TLS on
+    /// port 443 (the way a campus network forces it) and both sides refusing anything but a
+    /// relay. webrtc-rs can't do TURN over TLS itself, so this connects only via relay_bridge.
+    ///   CARSON_ICE_RELAY_ONLY=1 CARSON_TEST_TURN_USER=… CARSON_TEST_TURN_CRED=… \
+    ///   cargo test -p carson-agent relays_over_tls -- --ignored --nocapture
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore = "needs a real TURN server and credentials"]
+    async fn relays_over_tls_when_that_is_the_only_way_out() {
+        let env = |k: &str| std::env::var(k).unwrap_or_else(|_| panic!("set {k}"));
+        assert!(
+            std::env::var_os("CARSON_ICE_RELAY_ONLY").is_some(),
+            "set CARSON_ICE_RELAY_ONLY=1 so no direct path can mask the bridge"
+        );
+        let (user, cred) = (env("CARSON_TEST_TURN_USER"), env("CARSON_TEST_TURN_CRED"));
+        let tls_url = std::env::var("CARSON_TEST_TURNS_URL")
+            .unwrap_or_else(|_| "turns:global.relay.metered.ca:443?transport=tcp".into());
+        let udp_url = std::env::var("CARSON_TEST_TURN_UDP_URL")
+            .unwrap_or_else(|_| "turn:global.relay.metered.ca:80".into());
+        let server = |url: String| RTCIceServer {
+            urls: vec![url],
+            username: user.clone(),
+            credential: cred.clone(),
+        };
+
+        let (out_tx, mut out_rx) = mpsc::unbounded_channel::<Envelope>();
+        let (ev_tx, ev_rx) = mpsc::unbounded_channel();
+        let media = MediaOptions {
+            source: Source::TestPattern,
+            input: crate::media::InputMode::Record(Arc::default()),
+            ..Default::default()
+        };
+        let capturer = crate::media::open_source(&media).unwrap();
+        let cfg = SessionConfig {
+            sid: "ses_relay".into(),
+            ice_servers: vec![server(tls_url)], // the agent's only way out
+            media,
+            gate: None,
+            viewer_label: None,
+            show_indicator: false,
+            signer: Arc::new(crate::identity::DeviceKey::generate().unwrap()),
+        };
+        let session = tokio::spawn(run_session(cfg, capturer, out_tx, ev_tx.clone(), ev_rx));
+
+        let (cand_tx, mut cand_rx) = mpsc::unbounded_channel();
+        let (dc_tx, mut dc_rx) = mpsc::unbounded_channel();
+        let frames = Arc::new(AtomicUsize::new(0));
+        let packets = Arc::new(AtomicUsize::new(0));
+        let viewer = build_peer(
+            vec![server(udp_url)],
+            Arc::new(ViewerHandler {
+                candidates: cand_tx,
+                frames: Arc::clone(&frames),
+                packets: Arc::clone(&packets),
+                channels: dc_tx,
+            }),
+        )
+        .await
+        .unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(40);
+        while frames.load(Ordering::Relaxed) < 30 {
+            assert!(
+                Instant::now() < deadline,
+                "only {} frames ({} packets) arrived through the relay",
+                frames.load(Ordering::Relaxed),
+                packets.load(Ordering::Relaxed)
+            );
+            tokio::select! {
+                Some(env) = out_rx.recv() => match env.message_type() {
+                    Some(MessageType::SdpOffer) => {
+                        let offer: RTCSessionDescription = serde_json::from_value(env.body).unwrap();
+                        viewer.set_remote_description(offer).await.unwrap();
+                        let answer = viewer.create_answer(None).await.unwrap();
+                        viewer.set_local_description(answer.clone()).await.unwrap();
+                        ev_tx.send(SessionEvent::Answer(Box::new(answer))).unwrap();
+                    }
+                    Some(MessageType::IceCandidate) => {
+                        let c: RTCIceCandidateInit = serde_json::from_value(env.body).unwrap();
+                        assert!(c.candidate.contains("typ relay"), "relay-only, got {}", c.candidate);
+                        viewer.add_ice_candidate(c).await.unwrap();
+                    }
+                    Some(MessageType::SessionEnd) => panic!("session ended early: {}", env.body),
+                    _ => {}
+                },
+                Some(c) = cand_rx.recv() => { ev_tx.send(SessionEvent::Candidate(c)).unwrap(); }
+                _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+            }
+        }
+
+        // The point of all this: the control channels open through the relay too.
+        let mut labels = std::collections::HashSet::new();
+        while labels.len() < 2 {
+            let dc = tokio::time::timeout(Duration::from_secs(10), dc_rx.recv())
+                .await
+                .expect("ptr and ctl data channels through the relay")
+                .unwrap();
+            labels.insert(dc.label().await.unwrap());
+        }
+        assert!(
+            labels.contains("ctl") && labels.contains("ptr"),
+            "got {labels:?}"
+        );
+        eprintln!(
+            "relay over TLS: {} frames, data channels {labels:?}",
+            frames.load(Ordering::Relaxed)
+        );
+        let _ = ev_tx.send(SessionEvent::RemoteEnd);
+        let _ = viewer.close().await;
+        let _ = tokio::time::timeout(Duration::from_secs(5), session).await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
