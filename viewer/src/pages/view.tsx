@@ -433,7 +433,14 @@ function RemoteScreen({ device, options }: { device: Device; options: SessionOpt
       </header>
 
       <div ref={stageRef} tabIndex={0} className="relative flex min-h-0 min-w-0 flex-1 items-center justify-center overflow-hidden bg-black outline-none">
-        <video ref={videoRef} autoPlay playsInline muted className="h-full w-full object-contain" />
+        {/* While controlling, the remote computer's own cursor is in the video; hide ours so there's only one. */}
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          className={`h-full w-full object-contain ${control && inputAvailable && status.kind === "live" ? "cursor-none" : ""}`}
+        />
 
         {statsOn && (
           <pre className="pointer-events-none absolute top-3 left-3 rounded-md bg-black/70 px-3 py-2 font-mono text-xs leading-relaxed text-emerald-300">{statsText || "Collecting…"}</pre>
